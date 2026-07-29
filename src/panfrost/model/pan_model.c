@@ -98,7 +98,9 @@ const struct pan_model pan_model_list[] = {
                                               MODEL_RATES_X(4, 8, 16,  48,  48, 12)),
    VALHALL_MODEL(PAN_PROD_ID(10, 12, 4), 4, "G310v5",   "G710", MODEL_ANISO(ALL),  MODEL_TB_SIZES(32768, 16384),
                                               MODEL_RATES_X(4, 8, 16,  64,  64, 16)),
-
+   // TODO(leegao): add others (like 715)
+   VALHALL_MODEL(PAN_PROD_ID(11, 8, 3), 0, "G615",   "G710", MODEL_ANISO(ALL),  MODEL_TB_SIZES(32768, 16384),
+                                                 MODEL_RATES_X(4, 8, 16,  64,  64, 16)),
    FIFTHGEN_MODEL(PAN_PROD_ID(12, 8, 0), 4, "G720",  "G720", MODEL_ANISO(ALL),  MODEL_TB_SIZES(65536, 32768),
                                               MODEL_RATES_X(4, 8, 32,  64, 128, 8)),
    FIFTHGEN_MODEL(PAN_PROD_ID(13, 8, 0), 4, "G725",  "G725", MODEL_ANISO(ALL),  MODEL_TB_SIZES(65536, 65536),

@@ -127,6 +127,49 @@ static const struct vk_instance_extension_table panvk_instance_extensions = {
 #endif
 };
 
+bool
+kbase_kmod_probe(int fd);
+
+static VkResult
+panvk_enumerate_physical_devices(struct vk_instance *vk_instance)
+{
+   mesa_logi("inside panvk_enumerate_physical_devices");
+   struct panvk_instance *instance =
+      container_of(vk_instance, struct panvk_instance, vk);
+
+   const char *kbase_path = getenv("PANVK_KBASE_DEVICE_PATH");
+   if (!kbase_path)
+      kbase_path = "/dev/mali0";
+
+   int fd = open(kbase_path, O_RDWR | O_CLOEXEC);
+   if (fd < 0)
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
+
+   // if (!kbase_kmod_probe(fd)) {
+   //    close(fd);
+   //    return VK_ERROR_INCOMPATIBLE_DRIVER;
+   // }
+
+   struct panvk_physical_device *device =
+      vk_zalloc(&instance->vk.alloc, sizeof(*device), 8,
+                VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+   if (!device) {
+      close(fd);
+      return panvk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+   }
+
+   VkResult result = panvk_physical_device_init(device, instance, NULL);
+   if (result != VK_SUCCESS) {
+      mesa_logi("panvk_physical_device_init failed: %d", result);
+      vk_free(&instance->vk.alloc, device);
+      return result;
+   }
+
+   // Register device?
+   list_addtail(&device->vk.link, &vk_instance->physical_devices.list);
+   return VK_SUCCESS;
+}
+
 static VkResult
 panvk_physical_device_try_create(struct vk_instance *vk_instance,
                                  struct _drmDevice *drm_device,
@@ -206,6 +249,7 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                      const VkAllocationCallbacks *pAllocator,
                      VkInstance *pInstance)
 {
+   mesa_logi("inside of panvk_CreateInstance");
    struct panvk_instance *instance;
    VkResult result;
 
@@ -253,6 +297,7 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
       .priv = &instance->vk.alloc,
    };
 
+   instance->vk.physical_devices.enumerate = panvk_enumerate_physical_devices;
    instance->vk.physical_devices.try_create_for_drm =
       panvk_physical_device_try_create;
    instance->vk.physical_devices.destroy = panvk_destroy_physical_device;

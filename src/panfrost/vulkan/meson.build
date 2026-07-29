@@ -185,7 +185,7 @@ foreach arch : [6, 7, 10, 12, 13, 14]
       idep_libpan_per_arch[arch.to_string()],
     ],
     c_args : [no_override_init_args, panvk_flags, soong_compat_c_args, '-DPAN_ARCH=@0@'.format(arch)],
-    gnu_symbol_visibility : 'hidden',
+    # gnu_symbol_visibility : 'hidden',
   )
 endforeach
 
@@ -198,9 +198,9 @@ if with_platform_wayland
   panvk_deps += dep_wayland_client
 endif
 
-if with_platform_android
+#if with_platform_android
   libpanvk_files += files('panvk_android.c')
-endif
+#endif
 
 libvulkan_panfrost = shared_library(
   'vulkan_panfrost',
@@ -234,7 +234,7 @@ libvulkan_panfrost = shared_library(
   ],
   c_args : [no_override_init_args, panvk_flags, soong_compat_c_args],
   link_args : [vulkan_icd_link_args, ld_args_bsymbolic, ld_args_gc_sections, ld_args_build_id],
-  gnu_symbol_visibility : 'hidden',
+  # gnu_symbol_visibility : 'hidden',
   install : true,
 )
 

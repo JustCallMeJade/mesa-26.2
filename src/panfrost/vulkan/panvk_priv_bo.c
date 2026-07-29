@@ -15,19 +15,21 @@
 #include "pan_props.h"
 
 #include "genxml/decode.h"
+#include "vulkan/vulkan_core.h"
 
 VkResult
 panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
                      VkSystemAllocationScope scope, struct panvk_priv_bo **out)
 {
-   VkResult result;
+   VkResult result = VK_SUCCESS;
    int ret;
    struct panvk_priv_bo *priv_bo =
       vk_zalloc(&dev->vk.alloc, sizeof(*priv_bo), 8, scope);
-
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    if (!priv_bo)
       return panvk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    struct pan_kmod_bo *bo =
       pan_kmod_bo_alloc(dev->kmod.dev, dev->kmod.vm, size, flags);
    if (!bo) {
@@ -38,6 +40,7 @@ panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
    priv_bo->bo = bo;
    priv_bo->dev = dev;
 
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    if (!(flags & PAN_KMOD_BO_FLAG_NO_MMAP)) {
       priv_bo->addr.host =
          pan_kmod_bo_mmap(bo, PROT_READ | PROT_WRITE, MAP_SHARED, NULL);
@@ -59,6 +62,7 @@ panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
       },
    };
 
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    if (!(dev->kmod.vm->flags & PAN_KMOD_VM_FLAG_AUTO_VA)) {
       op.va.start =
          panvk_as_alloc(dev, dev->as.priv_heap, op.va.size,
@@ -69,6 +73,7 @@ panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
       }
    }
 
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    ret = pan_kmod_vm_bind(dev->kmod.vm, PAN_KMOD_VM_OP_MODE_IMMEDIATE, &op, 1);
    if (ret) {
       result = panvk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
@@ -77,6 +82,7 @@ panvk_priv_bo_create(struct panvk_device *dev, uint64_t size, uint32_t flags,
 
    priv_bo->addr.dev = op.va.start;
 
+   mesa_logi("    panvk_priv_bo_create: %d, %d", __LINE__, result);
    panvk_address_binding_report(dev, NULL, priv_bo->addr.dev,
                                 pan_kmod_bo_size(priv_bo->bo),
                                 VK_DEVICE_ADDRESS_BINDING_TYPE_BIND_EXT);

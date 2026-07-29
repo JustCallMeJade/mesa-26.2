@@ -33,6 +33,7 @@
 #include "vk_util.h"
 #include "vk_debug_utils.h"
 #include "vk_physical_device.h"
+#include "util/log.h"
 
 #if !VK_LITE_RUNTIME_INSTANCE
 #include "compiler/glsl_types.h"
@@ -413,9 +414,12 @@ vk_instance_add_driver_trace_modes(struct vk_instance *instance,
 static VkResult
 enumerate_drm_physical_devices_locked(struct vk_instance *instance)
 {
+
+   mesa_logi("inside of enumerate_drm_physical_devices_locked");
    /* libdrm returns a maximum of 256 devices (see MAX_DRM_NODES in libdrm) */
    drmDevicePtr devices[256];
-   int max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+   // int max_devices = drmGetDevices2(0, devices, ARRAY_SIZE(devices));
+   int max_devices = 1;
 
    if (max_devices < 1)
       return VK_SUCCESS;
@@ -445,6 +449,7 @@ enumerate_drm_physical_devices_locked(struct vk_instance *instance)
 static VkResult
 enumerate_physical_devices_locked(struct vk_instance *instance)
 {
+   mesa_logi("inside of enumerate_physical_devices_locked");
    if (instance->physical_devices.enumerate) {
       VkResult result = instance->physical_devices.enumerate(instance);
       if (result != VK_ERROR_INCOMPATIBLE_DRIVER)
@@ -477,6 +482,7 @@ enumerate_physical_devices(struct vk_instance *instance)
    }
    mtx_unlock(&instance->physical_devices.mutex);
 
+   mesa_logi("finished enumerate_physical_devices: result = %d", result);
    return result;
 }
 

@@ -30,6 +30,7 @@
 #define PANTHOR_BO_LABEL_MAXLEN 4096
 
 const struct pan_kmod_ops panthor_kmod_ops;
+extern const struct pan_kmod_ops kbase_kmod_ops;
 
 /* Objects used to track VAs returned through async unmaps. */
 struct panthor_kmod_va_collect {
@@ -155,6 +156,11 @@ panthor_dev_query_thread_props(struct panthor_kmod_dev *panthor_dev)
 static void
 panthor_dev_query_props(struct panthor_kmod_dev *panthor_dev)
 {
+   if (panthor_dev->base.ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    struct pan_kmod_dev_props *props = &panthor_dev->base.props;
 
    *props = (struct pan_kmod_dev_props){
@@ -334,6 +340,11 @@ err_free_dev:
 static void
 panthor_kmod_dev_destroy(struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    struct panthor_kmod_dev *panthor_dev =
       container_of(dev, struct panthor_kmod_dev, base);
 
@@ -345,6 +356,11 @@ panthor_kmod_dev_destroy(struct pan_kmod_dev *dev)
 static struct pan_kmod_va_range
 panthor_kmod_dev_query_user_va_range(const struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return (struct pan_kmod_va_range){0};
+   }
+
    struct panthor_kmod_dev *panthor_dev =
       container_of(dev, struct panthor_kmod_dev, base);
    uint8_t va_bits = MMU_FEATURES_VA_BITS(panthor_dev->props.gpu.mmu_features);
@@ -386,6 +402,11 @@ panthor_kmod_bo_alloc(struct pan_kmod_dev *dev,
                       struct pan_kmod_vm *exclusive_vm, uint64_t size,
                       uint32_t flags)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return NULL;
+   }
+
    /* We don't support allocating on-fault. */
    if (flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) {
       mesa_loge("panthor_kmod doesn't support PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT");
@@ -441,6 +462,11 @@ err_free_bo:
 static void
 panthor_kmod_bo_free(struct pan_kmod_bo *bo)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    struct panthor_kmod_bo *panthor_bo =
       container_of(bo, struct panthor_kmod_bo, base);
 
@@ -456,6 +482,11 @@ panthor_kmod_bo_free(struct pan_kmod_bo *bo)
 static struct pan_kmod_bo *
 panthor_kmod_bo_import(struct pan_kmod_dev *dev, uint32_t handle, uint64_t size)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return NULL;
+   }
+
    int ret;
    struct panthor_kmod_bo *panthor_bo =
       pan_kmod_dev_alloc(dev, sizeof(*panthor_bo));
@@ -508,6 +539,11 @@ err_free_bo:
 static int
 panthor_kmod_bo_export(struct pan_kmod_bo *bo, int dmabuf_fd)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_bo *panthor_bo =
       container_of(bo, struct panthor_kmod_bo, base);
 
@@ -558,6 +594,11 @@ panthor_kmod_bo_export(struct pan_kmod_bo *bo, int dmabuf_fd)
 static off_t
 panthor_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct drm_panthor_bo_mmap_offset req = {.handle = bo->handle};
    int ret = pan_kmod_ioctl(bo->dev->fd, DRM_IOCTL_PANTHOR_BO_MMAP_OFFSET,
                             &req);
@@ -574,6 +615,11 @@ static bool
 panthor_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns,
                      bool for_read_only_access)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_bo *panthor_bo =
       container_of(bo, struct panthor_kmod_bo, base);
    bool shared =
@@ -641,6 +687,11 @@ panthor_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns,
 static int
 panthor_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    STACK_ARRAY(struct drm_panthor_bo_sync_op, panthor_ops,
                util_dynarray_num_elements(&dev->pending_bo_syncs.array,
                                           struct pan_kmod_deferred_bo_sync));
@@ -675,6 +726,11 @@ int
 panthor_kmod_bo_attach_sync_point(struct pan_kmod_bo *bo, uint32_t sync_handle,
                                   uint64_t sync_point, bool written)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_bo *panthor_bo =
       container_of(bo, struct panthor_kmod_bo, base);
    struct panthor_kmod_vm *panthor_vm =
@@ -751,6 +807,13 @@ int
 panthor_kmod_bo_get_sync_point(struct pan_kmod_bo *bo, uint32_t *sync_handle,
                                uint64_t *sync_point, bool for_read_only_access)
 {
+   if (bo->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      *sync_handle = 0;
+      *sync_point = 0;
+      return 0;
+   }
+
    struct panthor_kmod_bo *panthor_bo =
       container_of(bo, struct panthor_kmod_bo, base);
    bool shared =
@@ -810,6 +873,11 @@ static struct pan_kmod_vm *
 panthor_kmod_vm_create(struct pan_kmod_dev *dev, uint32_t flags,
                        uint64_t user_va_start, uint64_t user_va_range)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       pan_kmod_dev_alloc(dev, sizeof(*panthor_vm));
    if (!panthor_vm) {
@@ -865,6 +933,11 @@ err_free_vm:
 static void
 panthor_kmod_vm_collect_freed_vas(struct panthor_kmod_vm *vm)
 {
+   if (vm->base.dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    if (!(vm->base.flags & PAN_KMOD_VM_FLAG_AUTO_VA))
       return;
 
@@ -894,6 +967,11 @@ panthor_kmod_vm_collect_freed_vas(struct panthor_kmod_vm *vm)
 static void
 panthor_kmod_vm_destroy(struct pan_kmod_vm *vm)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       container_of(vm, struct panthor_kmod_vm, base);
    struct drm_panthor_vm_destroy req = {.id = vm->handle};
@@ -928,6 +1006,11 @@ panthor_kmod_vm_destroy(struct pan_kmod_vm *vm)
 static uint64_t
 panthor_kmod_vm_alloc_va(struct panthor_kmod_vm *panthor_vm, uint64_t size)
 {
+   if (panthor_vm->base.dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    uint64_t va;
 
    assert(panthor_vm->base.flags & PAN_KMOD_VM_FLAG_AUTO_VA);
@@ -956,6 +1039,11 @@ static int
 panthor_kmod_vm_bind(struct pan_kmod_vm *vm, enum pan_kmod_vm_op_mode mode,
                      struct pan_kmod_vm_op *ops, uint32_t op_count)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       container_of(vm, struct panthor_kmod_vm, base);
    struct drm_panthor_vm_bind_op bind_ops_storage[16];
@@ -1241,6 +1329,11 @@ out_free_va_collect:
 static enum pan_kmod_vm_state
 panthor_kmod_vm_query_state(struct pan_kmod_vm *vm)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct drm_panthor_vm_get_state query = {.vm_id = vm->handle};
    int ret = pan_kmod_ioctl(vm->dev->fd, DRM_IOCTL_PANTHOR_VM_GET_STATE,
                             &query);
@@ -1254,6 +1347,11 @@ panthor_kmod_vm_query_state(struct pan_kmod_vm *vm)
 uint32_t
 panthor_kmod_vm_sync_handle(struct pan_kmod_vm *vm)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       container_of(vm, struct panthor_kmod_vm, base);
 
@@ -1264,6 +1362,11 @@ panthor_kmod_vm_sync_handle(struct pan_kmod_vm *vm)
 uint64_t
 panthor_kmod_vm_sync_lock(struct pan_kmod_vm *vm)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       container_of(vm, struct panthor_kmod_vm, base);
 
@@ -1276,6 +1379,11 @@ panthor_kmod_vm_sync_lock(struct pan_kmod_vm *vm)
 void
 panthor_kmod_vm_sync_unlock(struct pan_kmod_vm *vm, uint64_t new_sync_point)
 {
+   if (vm->dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    struct panthor_kmod_vm *panthor_vm =
       container_of(vm, struct panthor_kmod_vm, base);
 
@@ -1295,15 +1403,33 @@ panthor_kmod_vm_sync_unlock(struct pan_kmod_vm *vm, uint64_t new_sync_point)
 uint32_t
 panthor_kmod_get_flush_id(const struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    struct panthor_kmod_dev *panthor_dev =
       container_of(dev, struct panthor_kmod_dev, base);
 
    return *(panthor_dev->flush_id);
 }
 
+static const struct drm_panthor_csif_info kbase_csif_info = {
+   .csg_slot_count = 4,
+   .cs_slot_count = 2,
+   .cs_reg_count = 96,             /* 96 user registers (r0-r95) */
+   .unpreserved_cs_reg_count = 0,
+   .scoreboard_slot_count = 8,     /* 8 scoreboard slots */
+};
+
 const struct drm_panthor_csif_info *
 panthor_kmod_get_csif_props(const struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return &kbase_csif_info;
+   }
+
    struct panthor_kmod_dev *panthor_dev =
       container_of(dev, struct panthor_kmod_dev, base);
 
@@ -1313,6 +1439,11 @@ panthor_kmod_get_csif_props(const struct pan_kmod_dev *dev)
 static uint64_t
 panthor_kmod_query_timestamp(const struct pan_kmod_dev *dev)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return 0;
+   }
+
    if (!pan_kmod_driver_version_at_least(&dev->driver, 1, 1))
       return 0;
 
@@ -1336,6 +1467,11 @@ panthor_kmod_query_timestamp(const struct pan_kmod_dev *dev)
 static void
 panthor_kmod_bo_label(struct pan_kmod_dev *dev, struct pan_kmod_bo *bo, const char *label)
 {
+   if (dev->ops == &kbase_kmod_ops){
+      mesa_logi("%s: calling into panthor, skipping...", __FUNCTION__);
+      return;
+   }
+
    char truncated_label[PANTHOR_BO_LABEL_MAXLEN];
 
    if (!pan_kmod_driver_version_at_least(&dev->driver, 1, 4))

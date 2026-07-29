@@ -62,8 +62,8 @@ envsubst < android.toml > /tmp/android_wrapper.toml
 
 meson setup build --reconfigure \
     --cross-file /tmp/android_wrapper.toml \
-    -Dbuildtype=debugoptimized \
-    -Dplatforms=x11 \
+    -Dbuildtype=debug \
+    -Dplatforms=android,x11 \
     -Dandroid-stub=true \
     -Dandroid-libbacktrace=disabled \
     -Dplatform-sdk-version=30 \
@@ -81,4 +81,4 @@ meson setup build --reconfigure \
     -Dmesa-clc=system \
     -Dprecomp-compiler=system \
     -Dvulkan-drivers=panfrost \
-    -Dllvm=disabled
+    -Dllvm=disabled -Dstrip=false

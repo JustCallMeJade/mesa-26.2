@@ -17,6 +17,9 @@
 #endif
 
 #include "vk_log.h"
+#include <stdbool.h>
+#include <stdint.h>
+#include <xf86drm.h>
 
 static inline VkResult
 panvk_catch_indirect_alloc_failure(VkResult error)
@@ -55,6 +58,9 @@ panvk_catch_indirect_alloc_failure(VkResult error)
       case 10:                                                                 \
          panvk_arch_name(name, v10)(__VA_ARGS__);                              \
          break;                                                                \
+      case 11:                                                                 \
+         panvk_arch_name(name, v10)(__VA_ARGS__);                              \
+         break;                                                                \
       case 12:                                                                 \
          panvk_arch_name(name, v12)(__VA_ARGS__);                              \
          break;                                                                \
@@ -81,6 +87,9 @@ panvk_catch_indirect_alloc_failure(VkResult error)
       case 10:                                                                 \
          ret = panvk_arch_name(name, v10)(__VA_ARGS__);                        \
          break;                                                                \
+      case 11:                                                                 \
+         ret = panvk_arch_name(name, v10)(__VA_ARGS__);                        \
+         break;                                                                \
       case 12:                                                                 \
          ret = panvk_arch_name(name, v12)(__VA_ARGS__);                        \
          break;                                                                \
@@ -104,6 +113,8 @@ panvk_catch_indirect_alloc_failure(VkResult error)
 #define panvk_per_arch(name) panvk_arch_name(name, v9)
 #elif PAN_ARCH == 10
 #define panvk_per_arch(name) panvk_arch_name(name, v10)
+#elif PAN_ARCH == 11
+#define panvk_per_arch(name) panvk_arch_name(name, v10)
 #elif PAN_ARCH == 12
 #define panvk_per_arch(name) panvk_arch_name(name, v12)
 #elif PAN_ARCH == 13
@@ -114,5 +125,23 @@ panvk_catch_indirect_alloc_failure(VkResult error)
 #error "Unsupported arch"
 #endif
 #endif
+
+static inline bool
+panvk_fd_is_kbase(int fd)
+{
+   static int cached_kbase_fd = -1;
+   static bool cached_result = false;
+   if (fd == cached_kbase_fd)
+      return cached_result;
+
+   drmVersionPtr version = drmGetVersion(fd);
+   bool is_kbase = (version == NULL);
+   if (version)
+      drmFreeVersion(version);
+
+   cached_kbase_fd = fd;
+   cached_result = is_kbase;
+   return is_kbase;
+}
 
 #endif

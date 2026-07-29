@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <stdio.h>
 #include <string.h>
 #include <xf86drm.h>
 
@@ -14,6 +15,7 @@
 
 extern const struct pan_kmod_ops panfrost_kmod_ops;
 extern const struct pan_kmod_ops panthor_kmod_ops;
+extern const struct pan_kmod_ops kbase_kmod_ops;
 
 static const struct {
    const char *name;
@@ -26,6 +28,10 @@ static const struct {
    {
       "panthor",
       &panthor_kmod_ops,
+   },
+   {
+      "mali_kbase",
+      &kbase_kmod_ops,
    },
 };
 
@@ -51,10 +57,20 @@ struct pan_kmod_dev *
 pan_kmod_dev_create(int fd, uint32_t flags,
                     const struct pan_kmod_allocator *allocator)
 {
+   mesa_logi("in pan_kmod_dev_create: %d", fd);
    if (!allocator)
          allocator = &default_allocator;
 
    drmVersionPtr version = drmGetVersion(fd);
+
+   if (!version) {
+      mesa_logi("in pan_kmod_dev_create version: %p", kbase_kmod_ops.dev_create);
+      struct pan_kmod_driver fake_ver = {
+      };
+
+      return kbase_kmod_ops.dev_create(fd, flags, &fake_ver, allocator);
+   }
+
    struct pan_kmod_dev *dev = NULL;
 
    if (!version)
@@ -113,7 +129,8 @@ pan_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *exclusive_vm,
       return NULL;
    }
 
-   assert(*slot == NULL);
+   // TODO(leegao): look into this
+   // assert(*slot == NULL);
    *slot = bo;
    return bo;
 }

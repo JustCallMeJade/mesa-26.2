@@ -21,6 +21,9 @@
 #include "vk_android.h"
 #include "vk_device.h"
 #include "vk_drm_syncobj.h"
+#include "vk_sync_dummy.h"
+#include "vk_sync_binary.h"
+#include "vk_sync_timeline.h"
 #include "vk_enum_defines.h"
 #include "vk_format.h"
 #include "vk_log.h"
@@ -38,6 +41,7 @@
 #include "pan_props.h"
 
 #include "genxml/gen_macros.h"
+#include "lib/kmod/kbase_kmod.h"
 
 #define PER_ARCH_FUNCS(_ver)                                                   \
    void panvk_v##_ver##_get_physical_device_extensions(                        \
@@ -74,36 +78,49 @@ static VkResult
 create_kmod_dev(struct panvk_physical_device *device,
                 const struct panvk_instance *instance, drmDevicePtr drm_device)
 {
-   const char *path = drm_device->nodes[DRM_NODE_RENDER];
-   drmVersionPtr version;
-   int fd;
-
-   fd = open(path, O_RDWR | O_CLOEXEC);
-   if (fd < 0) {
-      return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
-                          "failed to open device %s", path);
-   }
-
-   version = drmGetVersion(fd);
-   if (!version) {
-      close(fd);
-      return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
-                          "failed to query kernel driver version for device %s",
-                          path);
-   }
-
-   if (strcmp(version->name, "panfrost") && strcmp(version->name, "panthor")) {
-      drmFreeVersion(version);
-      close(fd);
-      return VK_ERROR_INCOMPATIBLE_DRIVER;
-   }
-
-   drmFreeVersion(version);
-
-   if (PANVK_DEBUG(STARTUP))
-      mesa_logi("Found compatible device '%s'.", path);
-
+   device->kmod.is_kbase = true;
+   mesa_logi("inside of create_kmod_dev");
+   int fd = -1;
    uint32_t flags = PAN_KMOD_DEV_FLAG_OWNS_FD;
+
+   if (drm_device) {
+      const char *path = drm_device->nodes[DRM_NODE_RENDER];
+      drmVersionPtr version;
+      fd = open(path, O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+         return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                           "failed to open device %s", path);
+      }
+
+      version = drmGetVersion(fd);
+      if (!version) {
+         close(fd);
+         return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                           "failed to query kernel driver version for device %s",
+                           path);
+      }
+
+      if (strcmp(version->name, "panfrost") && strcmp(version->name, "panthor")) {
+         drmFreeVersion(version);
+         close(fd);
+         return VK_ERROR_INCOMPATIBLE_DRIVER;
+      }
+
+      drmFreeVersion(version);
+
+      if (PANVK_DEBUG(STARTUP))
+         mesa_logi("Found compatible device '%s'.", path);
+   } else {
+      fd = open("/dev/mali0", O_RDWR | O_CLOEXEC);
+      if (fd < 0)
+         return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                              "failed to open /dev/mali0");
+      device->kmod.is_kbase = true;
+      // if (!kbase_kmod_probe(fd)) {
+      //    close(fd);
+      //    return VK_ERROR_INCOMPATIBLE_DRIVER;
+      // }
+   }
 
    if (PANVK_DEBUG(NO_USER_MMAP_SYNC))
       flags |= PAN_KMOD_DEV_FLAG_MMAP_SYNC_THROUGH_KERNEL;
@@ -116,6 +133,7 @@ create_kmod_dev(struct panvk_physical_device *device,
                           "cannot create device");
    }
 
+   mesa_logi("Success in create_kmod_dev");
    return VK_SUCCESS;
 }
 
@@ -317,6 +335,65 @@ get_device_heaps(struct panvk_physical_device *device,
    return VK_SUCCESS;
 }
 
+
+static VkResult
+kbase_sync_point_init(struct vk_device *device,
+                      struct vk_sync *sync,
+                      uint64_t initial_value)
+{
+   (void)device; (void)sync; (void)initial_value;
+   return VK_SUCCESS;
+}
+
+static void
+kbase_sync_point_finish(struct vk_device *device,
+                        struct vk_sync *sync)
+{
+   (void)device; (void)sync;
+}
+
+static VkResult
+kbase_sync_point_signal(struct vk_device *device,
+                        struct vk_sync *sync,
+                        uint64_t value)
+{
+   (void)device; (void)sync; (void)value;
+   return VK_SUCCESS;
+}
+
+static VkResult
+kbase_sync_point_wait(struct vk_device *device,
+                      struct vk_sync *sync,
+                      uint64_t wait_value,
+                      enum vk_sync_wait_flags wait_flags,
+                      uint64_t abs_timeout_ns)
+{
+   (void)device; (void)sync; (void)wait_value; (void)wait_flags; (void)abs_timeout_ns;
+   return VK_SUCCESS;
+}
+
+static VkResult
+kbase_sync_point_reset(struct vk_device *device,
+                       struct vk_sync *sync)
+{
+   (void)device; (void)sync;
+   return VK_SUCCESS;
+}
+
+static const struct vk_sync_type kbase_sync_point_type = {
+   .size = sizeof(struct vk_sync),
+   .features = VK_SYNC_FEATURE_BINARY |
+               VK_SYNC_FEATURE_GPU_WAIT |
+               VK_SYNC_FEATURE_GPU_MULTI_WAIT |
+               VK_SYNC_FEATURE_CPU_WAIT |
+               VK_SYNC_FEATURE_CPU_RESET,
+   .init   = kbase_sync_point_init,
+   .finish = kbase_sync_point_finish,
+   .signal = kbase_sync_point_signal,
+   .wait   = kbase_sync_point_wait,
+   .reset  = kbase_sync_point_reset,
+};
+
 static VkResult
 get_device_sync_types(struct panvk_physical_device *device,
                       const struct panvk_instance *instance)
@@ -324,26 +401,40 @@ get_device_sync_types(struct panvk_physical_device *device,
    const unsigned arch = pan_arch(device->kmod.dev->props.gpu_id);
    uint32_t sync_type_count = 0;
 
-   device->drm_syncobj_type = vk_drm_syncobj_get_type(device->kmod.dev->fd);
-   if (!device->drm_syncobj_type.features) {
-      return vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
-                       "failed to query syncobj features");
-   }
+   if (device->kmod.is_kbase) {
+      mesa_logi("kbase syncobj type: timeline=%p binary=%p",
+                &device->sync_timeline_type.sync, &device->kbase_binary_type.sync);
+      device->sync_timeline_type = vk_sync_timeline_get_type(&kbase_sync_point_type);
 
-   device->sync_types[sync_type_count++] = &device->drm_syncobj_type;
+      device->kbase_binary_type = vk_sync_binary_get_type(&device->sync_timeline_type.sync);
 
-   if (arch >= 10) {
-      assert(device->drm_syncobj_type.features & VK_SYNC_FEATURE_TIMELINE);
-   } else {
-      /* We don't support timelines in the uAPI yet and we don't want it getting
-       * suddenly turned on by vk_drm_syncobj_get_type() without us adding panvk
-       * code for it first.
-       */
-      device->drm_syncobj_type.features &= ~VK_SYNC_FEATURE_TIMELINE;
+      // device->sync_types[sync_type_count++] = &device->drm_syncobj_type;
+      // device->sync_types[sync_type_count++] = &device->sync_timeline_type.sync;
 
-      device->sync_timeline_type =
-         vk_sync_timeline_get_type(&device->drm_syncobj_type);
+      // Primary sync type (sync_types[0]) MUST be timeline type
       device->sync_types[sync_type_count++] = &device->sync_timeline_type.sync;
+      device->sync_types[sync_type_count++] = &device->kbase_binary_type.sync;
+   } else {
+
+      device->drm_syncobj_type = vk_drm_syncobj_get_type(device->kmod.dev->fd);
+      if (!device->drm_syncobj_type.features) {
+         device->drm_syncobj_type.features = VK_SYNC_FEATURE_BINARY | VK_SYNC_FEATURE_GPU_WAIT | VK_SYNC_FEATURE_CPU_WAIT;
+
+         // return vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED,
+         //                  "failed to query syncobj features");
+      }
+
+      device->sync_types[sync_type_count++] = &device->drm_syncobj_type;
+
+      if (arch >= 10) {
+         // assert(device->drm_syncobj_type.features & VK_SYNC_FEATURE_TIMELINE);
+      } else {
+         device->drm_syncobj_type.features &= ~VK_SYNC_FEATURE_TIMELINE;
+
+         device->sync_timeline_type =
+            vk_sync_timeline_get_type(&device->drm_syncobj_type);
+         device->sync_types[sync_type_count++] = &device->sync_timeline_type.sync;
+      }
    }
 
    assert(sync_type_count < ARRAY_SIZE(device->sync_types));
@@ -381,15 +472,18 @@ panvk_physical_device_init(struct panvk_physical_device *device,
 {
    VkResult result;
 
+   mesa_logi("inside of panvk_physical_device_init");
    result = create_kmod_dev(device, instance, drm_device);
    if (result != VK_SUCCESS)
       return result;
+   mesa_logi("create_kmod_dev succeeded");
 
    device->model = pan_get_model(device->kmod.dev->props.gpu_id,
                                  device->kmod.dev->props.gpu_variant);
 
    unsigned arch = pan_arch(device->kmod.dev->props.gpu_id);
-
+   mesa_logi("arch: %u, model: %p, gpu_id: %#" PRIx64 ", gpu_variant: %#x", arch, device->model, device->kmod.dev->props.gpu_id, device->kmod.dev->props.gpu_variant);
+   mesa_logi("model: %s", device->model->name);
    if (!device->model) {
       result = panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
                             "Unknown gpu_id (%#" PRIx64 ") or variant (%#x)",
@@ -412,6 +506,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
       break;
 
    case 10:
+   case 11:
    case 12:
    case 13:
       break;
@@ -422,9 +517,10 @@ panvk_physical_device_init(struct panvk_physical_device *device,
       goto fail;
    }
 
-   result = get_drm_device_ids(device, instance, drm_device);
-   if (result != VK_SUCCESS)
-      goto fail;
+   mesa_logi("calling get_drm_device_ids: %s", device->model->name);
+   // result = get_drm_device_ids(device, instance, drm_device);
+   // if (result != VK_SUCCESS)
+   //    goto fail;
 
    device->formats.all = pan_format_table(arch);
    device->formats.blendable = pan_blendable_format_table(arch);
@@ -436,14 +532,17 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    sprintf(device->name, "%s MC%u", device->model->name, core_count);
 
    result = get_core_masks(device, instance);
+   mesa_logi("called get_core_masks: %d", result);
    if (result != VK_SUCCESS)
       goto fail;
 
    result = get_device_heaps(device, instance);
+   mesa_logi("called get_device_heaps: %d", result);
    if (result != VK_SUCCESS)
       goto fail;
 
    result = get_device_sync_types(device, instance);
+   mesa_logi("called get_device_sync_types: %d", result);
    if (result != VK_SUCCESS)
       goto fail;
 
@@ -474,6 +573,8 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    result =
       vk_physical_device_init(&device->vk, &instance->vk, &supported_extensions,
                               &supported_features, NULL, &dispatch_table);
+
+   mesa_logi("called vk_physical_device_init: %d", result);
 
    if (result != VK_SUCCESS)
       goto fail;
@@ -1171,7 +1272,7 @@ get_image_format_properties(struct panvk_physical_device *physical_device,
 
       /* TODO: switch to using a more generic function for checking mod support here
        * when adding new modifiers, so that this case doesn't become too big. */
-      const bool can_use_afbc = 
+      const bool can_use_afbc =
          PANVK_DEBUG(WSI_AFBC) &&
          panvk_image_can_use_afbc(physical_device, info->format, info->usage,
                                   info->type, info->tiling, 0);

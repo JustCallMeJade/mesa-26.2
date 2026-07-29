@@ -197,6 +197,8 @@ pan_blendable_format_table(unsigned arch)
    FMT_TABLE(13);
    FMT_TABLE(14);
 #undef FMT_TABLE
+   case 11:
+      return pan_blendable_formats_v10;
    default:
       assert(!"Unsupported architecture");
       return NULL;
@@ -228,6 +230,8 @@ pan_format_table(unsigned arch)
    FMT_TABLE(13);
    FMT_TABLE(14);
 #undef FMT_TABLE
+   case 11:
+      return pan_pipe_format_v10;
    default:
       assert(!"Unsupported architecture");
       return NULL;

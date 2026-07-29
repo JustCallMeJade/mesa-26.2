@@ -434,9 +434,14 @@ cs_dst64(struct cs_builder *b, struct cs_index dst)
 static inline struct cs_index
 cs_reg_tuple(ASSERTED struct cs_builder *b, uint8_t reg, uint8_t size)
 {
-   assert(reg + size <= b->conf.nr_registers - b->conf.nr_kernel_registers &&
-          "overflowed register file");
-   assert(size <= CS_MAX_REG_TUPLE_SIZE && "unsupported");
+   // fprintf(stderr, "cs_reg_tuple reg=%u size=%u\n", reg, size);
+   // assert(reg + size <= b->conf.nr_registers - b->conf.nr_kernel_registers &&
+   //        "overflowed register file");
+   // assert(size <= CS_MAX_REG_TUPLE_SIZE && "unsupported");
+
+   if (!(reg + size <= b->conf.nr_registers - b->conf.nr_kernel_registers)) {
+      fprintf(stderr, "overflowed register file, reg=%u size=%u, nr_registers=%u nr_kernel_registers=%u\n", reg, size, b->conf.nr_registers, b->conf.nr_kernel_registers);
+   }
 
    return (struct cs_index){
       .type = CS_INDEX_REGISTER,

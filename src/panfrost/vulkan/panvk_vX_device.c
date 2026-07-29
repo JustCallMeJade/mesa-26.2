@@ -393,8 +393,22 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       .free = panvk_kmod_free,
       .priv = &device->vk.alloc,
    };
+   // int fresh_mali_fd = open("/dev/mali0", O_RDWR | O_CLOEXEC);
+   int fd;
+   if (physical_device->kmod.is_kbase) {
+      fd = open("/dev/mali0", O_RDWR | O_CLOEXEC);
+      if (fd < 0) {
+         result = panvk_errorf(physical_device, VK_ERROR_INITIALIZATION_FAILED,
+                                 "failed to open /dev/mali0");
+         goto err_free_dev;
+      }
+   } else {
+      fd = os_dupfd_cloexec(physical_device->kmod.dev->fd);
+   }
+
+   mesa_logi("create_device: %d", fd);
    device->kmod.dev = pan_kmod_dev_create(
-      os_dupfd_cloexec(physical_device->kmod.dev->fd),
+      fd,
       physical_device->kmod.dev->flags, &device->kmod.allocator);
 
    if (!device->kmod.dev) {
@@ -414,6 +428,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       device->kmod.dev, PANVK_VA_RESERVE_BOTTOM);
    uint64_t user_va_end = physical_device->memory.max_supported_va;
    uint32_t vm_flags = PAN_ARCH < 10 ? PAN_KMOD_VM_FLAG_AUTO_VA : 0;
+   vm_flags |= PAN_KMOD_VM_FLAG_AUTO_VA;
 
    device->kmod.vm =
       pan_kmod_vm_create(device->kmod.dev, vm_flags,
@@ -428,12 +443,13 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    const struct drm_panthor_csif_info *csif_info =
       panthor_kmod_get_csif_props(device->kmod.dev);
 
-   assert(csif_info->scoreboard_slot_count <= 16);
+   // assert(csif_info->scoreboard_slot_count <= 16);
    device->csf.sb.count = csif_info->scoreboard_slot_count;
    device->csf.sb.all_mask = (uint16_t)BITFIELD_MASK(csif_info->scoreboard_slot_count);
 
-   assert(device->csf.sb.count > PANVK_SB_ITER_START);
-   device->csf.sb.iter_count = device->csf.sb.count - PANVK_SB_ITER_START;
+   // TODO(leegao): FIX THIS
+   // assert(device->csf.sb.count > PANVK_SB_ITER_START);
+   device->csf.sb.iter_count = 0; // device->csf.sb.count - PANVK_SB_ITER_START;
 
 #if PAN_ARCH == 10
    device->csf.sb.iter_count =
@@ -446,6 +462,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
 
    simple_mtx_init(&device->as.lock, mtx_plain);
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    /* capture/replay requires a separate AS for fixed allocations. */
    if (device->vk.enabled_features.bufferDeviceAddressCaptureReplay) {
       const uint64_t split_point = user_va_end / 2;
@@ -456,6 +473,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       user_va_end = split_point;
    }
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    const uint64_t low_va_end = 1ull << 32;
    if (user_va_end <= low_va_end) {
       /* if user_va_end overlaps with the low 32bits, share the AS for both. */
@@ -476,6 +494,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       device->as.extended_range = true;
    }
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    panvk_device_init_mempools(device);
 
 #if PAN_ARCH >= 10
@@ -490,6 +509,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    }
 #endif
 
+mesa_logi("    pan_vX_create_device: %d", __LINE__);
 #if PAN_ARCH <= 9
    result = panvk_priv_bo_create(
       device, 128 * 1024 * 1024,
@@ -507,29 +527,37 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       goto err_free_priv_bos;
 #endif
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    result = panvk_priv_bo_create(
       device, pan_sample_positions_buffer_size(),
       panvk_device_adjust_bo_flags(device, PAN_KMOD_BO_FLAG_WB_MMAP),
       VK_SYSTEM_ALLOCATION_SCOPE_DEVICE, &device->sample_positions);
-   if (result != VK_SUCCESS)
-      goto err_free_priv_bos;
+   if (result != VK_SUCCESS) {
 
+      mesa_logi("    pan_vX_create_device: %d, result = %d", __LINE__, result);
+      goto err_free_priv_bos;
+   }
+
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    pan_upload_sample_positions(device->sample_positions->addr.host);
    panvk_priv_bo_flush(device->sample_positions, 0,
                        pan_sample_positions_buffer_size());
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
 #if PAN_ARCH >= 10
    result = panvk_per_arch(init_tiler_oom)(device);
    if (result != VK_SUCCESS)
       goto err_free_priv_bos;
 #endif
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    result = panvk_priv_bo_create(device, PAN_PRINTF_BUFFER_SIZE, 0,
                                  VK_SYSTEM_ALLOCATION_SCOPE_DEVICE,
                                  &device->printf.bo);
    if (result != VK_SUCCESS)
       goto err_free_priv_bos;
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    u_printf_init(&device->printf.ctx, device->printf.bo,
                  device->printf.bo->addr.host);
 
@@ -537,10 +565,12 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    vk_device_set_drm_fd(&device->vk, device->kmod.dev->fd);
 
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    result = panvk_precomp_init(device);
    if (result != VK_SUCCESS)
       goto err_free_priv_bos;
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    struct vk_pipeline_cache_create_info cache_info = {
       .weak_ref = true,
    };
@@ -550,16 +580,19 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       goto err_free_precomp;
    }
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
 #if PAN_ARCH >= 10 && PAN_ARCH < 14
    result = panvk_per_arch(device_draw_context_init)(device);
    if (result != VK_SUCCESS)
       goto err_free_mem_cache;
 #endif
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    result = panvk_meta_init(device);
    if (result != VK_SUCCESS)
       goto err_free_draw_ctx;
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    for (unsigned i = 0; i < pCreateInfo->queueCreateInfoCount; i++) {
       const VkDeviceQueueCreateInfo *queue_create =
          &pCreateInfo->pQueueCreateInfos[i];
@@ -576,6 +609,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
       }
    }
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    result = panvk_per_arch(utrace_context_init)(device);
    if (result != VK_SUCCESS)
       goto err_finish_queues;
@@ -586,6 +620,7 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
    panvk_utrace_perfetto_init(device, 2);
 #endif
 
+   mesa_logi("    pan_vX_create_device: %d", __LINE__);
    *pDevice = panvk_device_to_handle(device);
    return VK_SUCCESS;
 

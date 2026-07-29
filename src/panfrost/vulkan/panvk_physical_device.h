@@ -15,6 +15,7 @@
 #include "vk_physical_device.h"
 #include "vk_sync.h"
 #include "vk_sync_timeline.h"
+#include "vk_sync_binary.h"
 #include "vk_util.h"
 #include "wsi_common.h"
 
@@ -30,6 +31,7 @@ struct panvk_physical_device {
 
    struct {
       struct pan_kmod_dev *dev;
+      bool is_kbase;
    } kmod;
 
    const struct pan_model *model;
@@ -68,8 +70,14 @@ struct panvk_physical_device {
       alignas(8) uint64_t heap_used;
    } memory;
 
-   struct vk_sync_type drm_syncobj_type;
+   union {
+      struct vk_sync_type drm_syncobj_type;
+      struct vk_sync_binary_type kbase_binary_type;
+   };
+
    struct vk_sync_timeline_type sync_timeline_type;
+   struct vk_sync_timeline_type kbase_timeline_type;
+
    const struct vk_sync_type *sync_types[3];
 
    struct wsi_device wsi_device;

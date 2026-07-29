@@ -437,6 +437,14 @@ mesa_log(enum mesa_log_level level, const char *tag, const char *format, ...)
    va_list va;
 
    va_start(va, format);
+
+   // va_list va_fprintf;
+   // va_copy(va_fprintf, va);
+   // fprintf(stderr, "[%s] ", tag);
+   // vfprintf(stderr, format, va_fprintf);
+   // fprintf(stderr, "\n");
+   // va_end(va_fprintf);
+
    mesa_log_v(level, tag, format, va);
    va_end(va);
 }

@@ -14,6 +14,7 @@
 #include "panvk_macros.h"
 #include "panvk_queue.h"
 #include "panvk_utrace.h"
+#include "lib/kmod/kbase_kmod.h"
 
 #include "pan_trace.h"
 
@@ -332,8 +333,9 @@ init_utrace(struct panvk_gpu_queue *queue)
    VkResult result;
 
    const struct vk_sync_type *sync_type = phys_dev->sync_types[0];
-   assert(sync_type && vk_sync_type_is_drm_syncobj(sync_type) &&
-          (sync_type->features & VK_SYNC_FEATURE_TIMELINE));
+   assert(sync_type && (phys_dev->kmod.is_kbase ||
+             (vk_sync_type_is_drm_syncobj(sync_type) &&
+              (sync_type->features & VK_SYNC_FEATURE_TIMELINE))));
 
    result = vk_sync_create(&dev->vk, sync_type, VK_SYNC_IS_TIMELINE, 0,
                            &queue->utrace.sync);
@@ -552,20 +554,20 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
    cs_builder_fini(&b);
 
    pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
+   int ret = 0;
+   if (!phys_dev->kmod.is_kbase) {
+      ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_SUBMIT,
+                           &gsubmit);
+      if (ret)
+         return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
+                             "Failed to initialized subqueue: %m");
+      ret = drmSyncobjWait(dev->drm_fd, &queue->syncobj_handle, 1, INT64_MAX, 0, NULL);
+      if (ret)
+         return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
+                              "SyncobjWait failed: %m");
 
-   int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_SUBMIT,
-                            &gsubmit);
-   if (ret)
-      return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
-                          "Failed to initialized subqueue: %m");
-
-   ret = drmSyncobjWait(dev->drm_fd, &queue->syncobj_handle, 1, INT64_MAX, 0,
-                        NULL);
-   if (ret)
-      return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
-                          "SyncobjWait failed: %m");
-
-   drmSyncobjReset(dev->drm_fd, &queue->syncobj_handle, 1);
+      drmSyncobjReset(dev->drm_fd, &queue->syncobj_handle, 1);
+   }
 
    if (PANVK_DEBUG(TRACE)) {
       pandecode_user_msg(dev->debug.decode_ctx, "Init subqueue %d binary\n\n",
@@ -644,50 +646,83 @@ create_group(struct panvk_gpu_queue *queue,
    const struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(queue->vk.base.device->physical);
 
-   struct drm_panthor_queue_create qc[] = {
-      [PANVK_SUBQUEUE_VERTEX_TILER] =
-         {
-            .priority = 1,
-            .ringbuf_size = 64 * 1024,
-         },
-      [PANVK_SUBQUEUE_FRAGMENT] =
-         {
-            .priority = 1,
-            .ringbuf_size = 64 * 1024,
-         },
-      [PANVK_SUBQUEUE_COMPUTE] =
-         {
-            .priority = 1,
-            .ringbuf_size = 64 * 1024,
-         },
-   };
+   int ret = -1;
 
-   uint8_t max_compute_cores = util_bitcount64(phys_dev->compute_core_mask);
-   uint8_t max_fragment_cores = util_bitcount64(phys_dev->fragment_core_mask);
+   if (phys_dev->kmod.is_kbase) {
+      uint8_t max_comp = util_bitcount64(phys_dev->compute_core_mask);
+      uint8_t max_frag = util_bitcount64(phys_dev->fragment_core_mask);
+      if (shader_core_count) {
+         max_comp = MIN2(shader_core_count, max_comp);
+         max_frag = MIN2(shader_core_count, max_frag);
+      }
 
-   if (shader_core_count) {
-      max_compute_cores = MIN2(shader_core_count, max_compute_cores);
-      max_fragment_cores = MIN2(shader_core_count, max_fragment_cores);
+      // Try KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EX (ioctl 63, 0xc078803f)
+      struct kbase_ioctl_cs_queue_group_create_ex kgc_ex = {
+         .compute_core_mask  = phys_dev->compute_core_mask,
+         .fragment_core_mask = phys_dev->fragment_core_mask,
+         .tiler_core_mask    = 1,
+         .max_compute_cores  = max_comp,
+         .max_fragment_cores = max_frag,
+         .max_tiler_cores    = 1,
+         .priority           = group_priority,
+      };
+
+      ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EX, &kgc_ex);
+      if (ret == 0) {
+         queue->group_handle = (uint32_t)(kgc_ex.compute_core_mask >> 32);
+      } else {
+         struct kbase_ioctl_cs_queue_group_create kgc = {
+            .compute_core_mask  = phys_dev->compute_core_mask,
+            .fragment_core_mask = phys_dev->fragment_core_mask,
+            .tiler_core_mask    = 1,
+            .max_compute_cores  = max_comp,
+            .max_fragment_cores = max_frag,
+            .max_tiler_cores    = 1,
+            .priority           = group_priority,
+         };
+
+         ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &kgc);
+         if (ret == 0) {
+            queue->group_handle = kgc.group_handle;
+         }
+      }
+   } else {
+      struct drm_panthor_queue_create qc[] = {
+         [PANVK_SUBQUEUE_VERTEX_TILER] = { .priority = 1, .ringbuf_size = 64 * 1024 },
+         [PANVK_SUBQUEUE_FRAGMENT]     = { .priority = 1, .ringbuf_size = 64 * 1024 },
+         [PANVK_SUBQUEUE_COMPUTE]      = { .priority = 1, .ringbuf_size = 64 * 1024 },
+      };
+
+      uint8_t max_compute_cores = util_bitcount64(phys_dev->compute_core_mask);
+      uint8_t max_fragment_cores = util_bitcount64(phys_dev->fragment_core_mask);
+
+      if (shader_core_count) {
+         max_compute_cores = MIN2(shader_core_count, max_compute_cores);
+         max_fragment_cores = MIN2(shader_core_count, max_fragment_cores);
+      }
+
+      struct drm_panthor_group_create gc = {
+         .compute_core_mask  = phys_dev->compute_core_mask,
+         .fragment_core_mask = phys_dev->fragment_core_mask,
+         .tiler_core_mask    = 1,
+         .max_compute_cores  = max_compute_cores,
+         .max_fragment_cores = max_fragment_cores,
+         .max_tiler_cores    = 1,
+         .priority           = group_priority,
+         .queues             = DRM_PANTHOR_OBJ_ARRAY(ARRAY_SIZE(qc), qc),
+         .vm_id              = pan_kmod_vm_handle(dev->kmod.vm),
+      };
+
+      ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_CREATE, &gc);
+      if (ret == 0) {
+         queue->group_handle = gc.group_handle;
+      }
    }
 
-   struct drm_panthor_group_create gc = {
-      .compute_core_mask = phys_dev->compute_core_mask,
-      .fragment_core_mask = phys_dev->fragment_core_mask,
-      .tiler_core_mask = 1,
-      .max_compute_cores = max_compute_cores,
-      .max_fragment_cores = max_fragment_cores,
-      .max_tiler_cores = 1,
-      .priority = group_priority,
-      .queues = DRM_PANTHOR_OBJ_ARRAY(ARRAY_SIZE(qc), qc),
-      .vm_id = pan_kmod_vm_handle(dev->kmod.vm),
-   };
-
-   int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_CREATE, &gc);
    if (ret)
       return panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                           "Failed to create a scheduling group");
 
-   queue->group_handle = gc.group_handle;
    return VK_SUCCESS;
 }
 
@@ -744,16 +779,33 @@ init_tiler(struct panvk_gpu_queue *queue)
       goto err_free_desc;
    }
 
-   struct drm_panthor_tiler_heap_create thc = {
-      .vm_id = pan_kmod_vm_handle(dev->kmod.vm),
-      .chunk_size = tiler_heap->chunk_size,
-      .initial_chunk_count = phys_dev->csf.tiler.initial_chunks,
-      .max_chunks = phys_dev->csf.tiler.max_chunks,
-      .target_in_flight = 65535,
-   };
+   struct drm_panthor_tiler_heap_create thc = {0};
+   int ret = 0;
+   if (phys_dev->kmod.is_kbase) {
+      // Allocate the initial tiler chunk BO on kbase using pan_kmod_bo_alloc
+      struct pan_kmod_bo *tiler_chunk_bo =
+         pan_kmod_bo_alloc(dev->kmod.dev, dev->kmod.vm, tiler_heap->chunk_size,
+                           PAN_KMOD_BO_FLAG_NO_MMAP | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT);
+      if (!tiler_chunk_bo) {
+         result = panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                                 "Failed to allocate initial tiler chunk");
+         goto err_free_desc;
+      }
+      thc.first_heap_chunk_gpu_va = kbase_bo_gpu_va(tiler_chunk_bo);
+      thc.tiler_heap_ctx_gpu_va   = thc.first_heap_chunk_gpu_va;
+      thc.handle                  = 1;
+      ret = 0;
+   } else {
+      thc = (struct drm_panthor_tiler_heap_create){
+         .vm_id               = pan_kmod_vm_handle(dev->kmod.vm),
+         .chunk_size          = tiler_heap->chunk_size,
+         .initial_chunk_count = phys_dev->csf.tiler.initial_chunks,
+         .max_chunks          = phys_dev->csf.tiler.max_chunks,
+         .target_in_flight    = 65535,
+      };
+      ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_CREATE, &thc);
+   }
 
-   int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_CREATE,
-                            &thc);
    if (ret) {
       result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                             "Failed to create a tiler heap context");
@@ -782,13 +834,18 @@ static void
 cleanup_tiler(struct panvk_gpu_queue *queue)
 {
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
    struct panvk_tiler_heap *tiler_heap = &queue->tiler_heap;
-   struct drm_panthor_tiler_heap_destroy thd = {
-      .handle = tiler_heap->context.handle,
-   };
-   ASSERTED int ret =
-      pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_DESTROY, &thd);
-   assert(!ret);
+
+   if (!phys_dev->kmod.is_kbase) {
+      struct drm_panthor_tiler_heap_destroy thd = {
+         .handle = tiler_heap->context.handle,
+      };
+      ASSERTED int ret =
+         pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_DESTROY, &thd);
+      assert(!ret);
+   }
 
    panvk_pool_free_mem(&tiler_heap->desc);
    panvk_pool_free_mem(&tiler_heap->oom_fbd);
@@ -1183,6 +1240,8 @@ panvk_queue_submit_ioctl(struct panvk_queue_submit *submit)
 {
    const struct panvk_device *dev = submit->dev;
    struct panvk_gpu_queue *queue = submit->queue;
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
    int ret;
 
    if (PANVK_DEBUG(TRACE)) {
@@ -1207,6 +1266,12 @@ panvk_queue_submit_ioctl(struct panvk_queue_submit *submit)
     * make sure things are GPU-visible. */
    pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
 
+   if (phys_dev->kmod.is_kbase) {
+      // kbase handles submission and queue kicks via mmap doorbell page
+      // TODO(leegao): fix this
+      return VK_SUCCESS;
+   }
+
    struct drm_panthor_group_submit gsubmit = {
       .group_handle = queue->group_handle,
       .queue_submits =
@@ -1226,10 +1291,19 @@ panvk_queue_submit_process_signals(struct panvk_queue_submit *submit,
 {
    struct panvk_device *dev = submit->dev;
    struct panvk_gpu_queue *queue = submit->queue;
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
    ASSERTED int ret;
 
    if (!submit->signal_queue_mask)
       return;
+
+   if (phys_dev->kmod.is_kbase) {
+      if (submit->utrace.queue_mask) {
+         u_trace_context_process(&dev->utrace.utctx, false);
+      }
+      return;
+   }
 
    if (submit->force_sync) {
       uint64_t point = util_bitcount(submit->signal_queue_mask);
@@ -1409,7 +1483,16 @@ panvk_per_arch(create_gpu_queue)(struct panvk_device *dev,
    if (result != VK_SUCCESS)
       goto err_free_queue;
 
-   int ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
+   struct panvk_physical_device *phys_dev =
+         to_panvk_physical_device(dev->vk.physical);
+
+   int ret = 0;
+   if (phys_dev->kmod.is_kbase) {
+      queue->syncobj_handle = 1;
+   } else {
+      ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
+   }
+
    if (ret) {
       result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                             "Failed to create our internal sync object");
@@ -1459,11 +1542,14 @@ panvk_per_arch(destroy_gpu_queue)(struct vk_queue *vk_queue)
 {
    struct panvk_gpu_queue *queue = container_of(vk_queue, struct panvk_gpu_queue, vk);
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
 
    cleanup_queue(queue);
    destroy_group(queue);
    cleanup_tiler(queue);
-   drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
+   if (!phys_dev->kmod.is_kbase)
+      drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
    vk_queue_finish(&queue->vk);
    vk_free(&dev->vk.alloc, queue);
 }
@@ -1473,9 +1559,8 @@ panvk_per_arch(gpu_queue_check_status)(struct vk_queue *vk_queue)
 {
    struct panvk_gpu_queue *queue = container_of(vk_queue, struct panvk_gpu_queue, vk);
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
-   struct drm_panthor_group_get_state state = {
-      .group_handle = queue->group_handle,
-   };
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
 
    /* check for CS error and treat it as device lost */
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
@@ -1490,17 +1575,21 @@ panvk_per_arch(gpu_queue_check_status)(struct vk_queue *vk_queue)
       }
    }
 
-   int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_GET_STATE,
-                            &state);
-   if (!ret && !state.state)
-      return VK_SUCCESS;
+   if (!phys_dev->kmod.is_kbase) {
+      struct drm_panthor_group_get_state state = {
+         .group_handle = queue->group_handle,
+      };
 
-   /* Check printf buffer one more time before exiting */
-   u_printf_with_ctx(stdout, &dev->printf.ctx);
+      int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_GROUP_GET_STATE,
+                                 &state);
+      if (ret || state.state) {
+         u_printf_with_ctx(stdout, &dev->printf.ctx);
+         vk_queue_set_lost(&queue->vk,
+                           "group state: err=%d, state=0x%x, fatal_queues=0x%x", ret,
+                           state.state, state.fatal_queues);
+         return VK_ERROR_DEVICE_LOST;
+      }
+   }
 
-   vk_queue_set_lost(&queue->vk,
-                     "group state: err=%d, state=0x%x, fatal_queues=0x%x", ret,
-                     state.state, state.fatal_queues);
-
-   return VK_ERROR_DEVICE_LOST;
+   return VK_SUCCESS;
 }

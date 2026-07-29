@@ -415,6 +415,7 @@ pandecode_interpret_cs(struct pandecode_context *ctx, uint64_t queue_gpu_va,
 
    switch (pan_arch(gpu_id)) {
    case 10:
+   case 11:
       pandecode_interpret_cs_v10(ctx, queue_gpu_va, size, gpu_id, regs);
       break;
    case 12:
@@ -441,6 +442,7 @@ pandecode_cs_binary(struct pandecode_context *ctx, uint64_t bin_gpu_va,
 
    switch (pan_arch(gpu_id)) {
    case 10:
+   case 11:
       pandecode_cs_binary_v10(ctx, bin_gpu_va, size);
       break;
    case 12:
@@ -467,6 +469,7 @@ pandecode_cs_trace(struct pandecode_context *ctx, uint64_t trace_gpu_va,
 
    switch (pan_arch(gpu_id)) {
    case 10:
+   case 11:
       pandecode_cs_trace_v10(ctx, trace_gpu_va, size, gpu_id);
       break;
    case 12:

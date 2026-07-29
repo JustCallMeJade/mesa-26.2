@@ -129,7 +129,7 @@ __vk_log_impl(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
    char *message_idname = ralloc_asprintf(NULL, "%s:%d", file, line);
 
    const bool do_log = MESA_VK_LOG ||
-                       (instance && instance->enable_debug_logging);
+                       (instance && instance->enable_debug_logging) || true;
 
    if (do_log) {
       switch (severity) {
