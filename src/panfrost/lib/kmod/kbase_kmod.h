@@ -7,6 +7,8 @@
 
 #include "pan_kmod.h"
 #include <stdint.h>
+#include "kbase_uapi.h"
+#include "kbase_csf_uapi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,9 +25,7 @@ extern const struct pan_kmod_ops kbase_kmod_ops;
 /**
  * struct base_external_resource - external dma-buf resource for job submission.
  */
-struct base_external_resource {
-   uint64_t ext_resource; /* gpu_va | access (bit 0: 0=non-exclusive, 1=exclusive) */
-};
+struct base_external_resource;
 
 /**
  * kbase_kmod_job_submit - Submit a JM job chain directly via mali_kbase.
@@ -50,45 +50,6 @@ uint64_t kbase_kmod_job_submit(struct pan_kmod_dev *dev,
 
 uint64_t
 kbase_bo_gpu_va(const struct pan_kmod_bo *bo);
-
-
-#define KBASE_IOCTL_TYPE 0x80
-
-/* 120-byte extended struct for DDK >= 11.24 / v2.0 (0xc078803f, ioctl #63) */
-struct kbase_ioctl_cs_queue_group_create_ex {
-   uint64_t compute_core_mask;  /* 0x00 - Out: handle at 0x04 */
-   uint64_t fragment_core_mask; /* 0x08 */
-   uint64_t tiler_core_mask;    /* 0x10 */
-   uint8_t  max_compute_cores;  /* 0x18 */
-   uint8_t  max_fragment_cores; /* 0x19 */
-   uint8_t  max_tiler_cores;    /* 0x1a */
-   uint8_t  priority;           /* 0x1b */
-   uint8_t  padding[4];         /* 0x1c */
-   uint8_t  reserved[88];       /* 0x20 - 0x77 */
-};
-#define KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EX \
-   _IOWR(KBASE_IOCTL_TYPE, 63, struct kbase_ioctl_cs_queue_group_create_ex)
-
-/* 32-byte legacy struct (0xc020802a, ioctl #42) */
-struct kbase_ioctl_cs_queue_group_create {
-   uint64_t compute_core_mask;  /* 0x00 */
-   uint64_t fragment_core_mask; /* 0x08 */
-   uint64_t tiler_core_mask;    /* 0x10 */
-   uint8_t  max_compute_cores;  /* 0x18 */
-   uint8_t  max_fragment_cores; /* 0x19 */
-   uint8_t  max_tiler_cores;    /* 0x1a */
-   uint8_t  priority;           /* 0x1b */
-   uint32_t group_handle;       /* 0x1c - Out */
-};
-#define KBASE_IOCTL_CS_QUEUE_GROUP_CREATE \
-   _IOWR(KBASE_IOCTL_TYPE, 42, struct kbase_ioctl_cs_queue_group_create)
-
-/* KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE (0x4008802b, ioctl #43) */
-struct kbase_ioctl_cs_queue_group_terminate {
-   uint64_t group_handle;
-};
-#define KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE \
-   _IOW(KBASE_IOCTL_TYPE, 43, struct kbase_ioctl_cs_queue_group_terminate)
 
 int
 kbase_ioctl(int fd, unsigned long req, void *arg);

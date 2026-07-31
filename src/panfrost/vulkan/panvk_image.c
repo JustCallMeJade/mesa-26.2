@@ -206,6 +206,8 @@ panvk_image_can_use_mod(struct panvk_image *image,
                               image->vk.tiling == VK_IMAGE_TILING_LINEAR ||
                               image->vk.image_type == VK_IMAGE_TYPE_1D;
 
+   mesa_logi("forced_linear=%d, panvk_debug=%d, tiling=%d, image_type=%d, mod=0x%lx", forced_linear, (bool)PANVK_DEBUG(LINEAR), image->vk.tiling, image->vk.image_type, mod);
+
    /* If the image is meant to be linear, don't bother testing the
     * other cases. */
    if (forced_linear)

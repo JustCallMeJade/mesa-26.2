@@ -699,27 +699,8 @@ pan_kmod_bo_get_user_priv(const struct pan_kmod_bo *bo)
 
 struct pan_kmod_bo *pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd);
 
-static inline int
-pan_kmod_bo_export(struct pan_kmod_bo *bo)
-{
-   PAN_TRACE_FUNC(PAN_TRACE_LIB_KMOD);
-
-   int fd;
-
-   if (drmPrimeHandleToFD(bo->dev->fd, bo->handle, DRM_CLOEXEC | DRM_RDWR,
-                          &fd)) {
-      mesa_loge("drmPrimeHandleToFD() failed (err=%d)", errno);
-      return -1;
-   }
-
-   if (bo->dev->ops->bo_export && bo->dev->ops->bo_export(bo, fd)) {
-      close(fd);
-      return -1;
-   }
-
-   bo->flags |= PAN_KMOD_BO_FLAG_EXPORTED;
-   return fd;
-}
+int
+pan_kmod_bo_export(struct pan_kmod_bo *bo);
 
 static inline bool
 pan_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns,

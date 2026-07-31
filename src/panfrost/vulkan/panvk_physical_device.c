@@ -546,7 +546,7 @@ panvk_physical_device_init(struct panvk_physical_device *device,
    if (result != VK_SUCCESS)
       goto fail;
 
-   if (arch >= 10) {
+   if (arch >= 11) {
       /* XXX: Make dri options for thoses */
       device->csf.tiler.chunk_size = 2 * 1024 * 1024;
       device->csf.tiler.initial_chunks = 5;

@@ -30,118 +30,13 @@
 
 #include "pan_kmod_backend.h"
 #include "kbase_kmod.h"
+#include "mali_base_kernel.h"
+#include "kbase_uapi.h"
+#include "kbase_csf_uapi.h"
 
 /* ============================================================
  * mali_kbase ioctl definitions (Type 0x80)
  * ============================================================ */
-
-struct kbase_ioctl_version_check {
-   uint16_t major;
-   uint16_t minor;
-};
-#define KBASE_IOCTL_VERSION_CHECK \
-   _IOWR(KBASE_IOCTL_TYPE, 52, struct kbase_ioctl_version_check)
-
-struct kbase_ioctl_set_flags {
-   uint32_t create_flags;
-};
-#define KBASE_IOCTL_SET_FLAGS \
-   _IOW(KBASE_IOCTL_TYPE, 1, struct kbase_ioctl_set_flags)
-
-struct kbase_ioctl_get_gpuprops {
-   uint64_t buffer;
-   uint32_t size;
-   uint32_t flags;
-};
-#define KBASE_IOCTL_GET_GPUPROPS \
-   _IOW(KBASE_IOCTL_TYPE, 3, struct kbase_ioctl_get_gpuprops)
-
-/* GPU Property Keys */
-#define KBASE_GPUPROP_PRODUCT_ID                 1
-#define KBASE_GPUPROP_VERSION_STATUS             2
-#define KBASE_GPUPROP_MINOR_REVISION             3
-#define KBASE_GPUPROP_MAJOR_REVISION             4
-#define KBASE_GPUPROP_SHADER_PRESENT_LO         27
-#define KBASE_GPUPROP_SHADER_PRESENT_HI         28
-#define KBASE_GPUPROP_TILER_FEATURES            37
-#define KBASE_GPUPROP_MEM_FEATURES              38
-#define KBASE_GPUPROP_MMU_FEATURES              41
-#define KBASE_GPUPROP_TEX_FEATURES_0            68
-#define KBASE_GPUPROP_THREAD_MAX_THREADS        74
-#define KBASE_GPUPROP_THREAD_MAX_WORKGROUP_SIZE  76
-#define KBASE_GPUPROP_THREAD_FEATURES           77
-#define KBASE_GPUPROP_CYCLE_COUNTER_FREQUENCY   87
-
-/* Legacy 32-byte MEM_ALLOC (ioctl #5) */
-union kbase_ioctl_mem_alloc {
-   struct {
-      uint64_t va_pages;
-      uint64_t commit_pages;
-      uint64_t extension;
-      uint64_t flags;
-   } in;
-   struct {
-      uint64_t flags;
-      uint64_t gpu_va;
-   } out;
-};
-#define KBASE_IOCTL_MEM_ALLOC \
-   _IOWR(KBASE_IOCTL_TYPE, 5, union kbase_ioctl_mem_alloc)
-
-/* Extended 64-byte MEM_ALLOC_EX (ioctl #59, 0xc040803b) for DDK >= 11.9 */
-struct kbase_ioctl_mem_alloc_ex {
-   uint64_t va_pages;     /* 0x00 - Out: flags */
-   uint64_t commit_pages; /* 0x08 - Out: gpu_va / cookie */
-   uint64_t extension;    /* 0x10 */
-   uint64_t flags;        /* 0x18 */
-   uint64_t fixed_va;     /* 0x20 */
-   uint64_t extra[3];     /* 0x28, 0x30, 0x38 */
-};
-#define KBASE_IOCTL_MEM_ALLOC_EX \
-   _IOWR(KBASE_IOCTL_TYPE, 59, struct kbase_ioctl_mem_alloc_ex)
-
-#define BASE_MEM_PROT_CPU_RD     (1u << 0)
-#define BASE_MEM_PROT_CPU_WR     (1u << 1)
-#define BASE_MEM_PROT_GPU_RD     (1u << 2)
-#define BASE_MEM_PROT_GPU_WR     (1u << 3)
-#define BASE_MEM_PROT_GPU_EX     (1u << 4)
-#define BASE_MEM_GROW_ON_GPF     (1u << 9)
-#define BASE_MEM_COHERENT_SYSTEM (1u << 10)
-#define BASE_MEM_SAME_VA         (1u << 13)
-/* BASE_MEM_NEED_MMAP (1u << 14) is output-only; do NOT pass in input flags! */
-#define BASE_MEM_DONT_NEED       (1u << 17)
-#define BASE_MEM_IMPORT_SHARED   (1u << 18)
-
-struct kbase_ioctl_mem_free {
-   uint64_t gpu_addr;
-};
-#define KBASE_IOCTL_MEM_FREE \
-   _IOW(KBASE_IOCTL_TYPE, 7, struct kbase_ioctl_mem_free)
-
-union kbase_ioctl_mem_import {
-   struct {
-      uint64_t phandle;
-      uint32_t type;
-      uint32_t padding;
-      uint64_t flags;
-   } in;
-   struct {
-      uint64_t flags;
-      uint64_t gpu_va;
-      uint64_t va_pages;
-   } out;
-};
-#define KBASE_IOCTL_MEM_IMPORT \
-   _IOWR(KBASE_IOCTL_TYPE, 22, union kbase_ioctl_mem_import)
-#define BASE_MEM_IMPORT_TYPE_UMM 2
-
-struct kbase_ioctl_mem_flags_change {
-   uint64_t gpu_va;
-   uint64_t flags;
-   uint64_t mask;
-};
-#define KBASE_IOCTL_MEM_FLAGS_CHANGE \
-   _IOW(KBASE_IOCTL_TYPE, 23, struct kbase_ioctl_mem_flags_change)
 
 struct kbase_ioctl_mem_share {
    uint64_t gpu_va;
@@ -151,34 +46,8 @@ struct kbase_ioctl_mem_share {
 #define KBASE_IOCTL_MEM_SHARE \
    _IOWR(KBASE_IOCTL_TYPE, 0x33, struct kbase_ioctl_mem_share)
 
-struct kbase_ioctl_mem_sync {
-   uint64_t handle;
-   uint64_t user_addr;
-   uint64_t size;
-   uint8_t  type;
-   uint8_t  padding[7];
-};
-#define KBASE_IOCTL_MEM_SYNC \
-   _IOW(KBASE_IOCTL_TYPE, 15, struct kbase_ioctl_mem_sync)
 #define KBASE_SYNC_TO_DEVICE 0
 #define KBASE_SYNC_TO_CPU    1
-
-union kbase_ioctl_get_cpu_gpu_timeinfo {
-   struct {
-      uint32_t request_flags;
-      uint32_t paddings[7];
-   } in;
-   struct {
-      uint64_t sec;
-      uint32_t nsec;
-      uint32_t padding;
-      uint64_t timestamp;
-      uint64_t cycle_counter;
-   } out;
-};
-#define KBASE_IOCTL_GET_CPU_GPU_TIMEINFO \
-   _IOWR(KBASE_IOCTL_TYPE, 50, union kbase_ioctl_get_cpu_gpu_timeinfo)
-#define BASE_TIMEINFO_CYCLE_COUNTER_FLAG (1u << 2)
 
 /* ============================================================
  * Internal Structures
@@ -251,7 +120,7 @@ kbase_query_gpuprop(int fd, uint32_t prop_id)
 {
    struct kbase_ioctl_get_gpuprops req = {0};
    int ret = kbase_ioctl(fd, KBASE_IOCTL_GET_GPUPROPS, &req);
-   if (ret <= 0) return 0;
+   if (ret < 0) return 0;
 
    uint8_t *buf = calloc(1, (size_t)ret);
    if (!buf) return 0;
@@ -273,6 +142,7 @@ kbase_query_gpuprop(int fd, uint32_t prop_id)
 static void
 kbase_dev_query_props(struct kbase_kmod_dev *kd)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct pan_kmod_dev_props *p = &kd->base.props;
    int fd = kd->base.fd;
    memset(p, 0, sizeof(*p));
@@ -283,47 +153,38 @@ kbase_dev_query_props(struct kbase_kmod_dev *kd)
    uint32_t maj = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_MAJOR_REVISION);
    uint32_t min = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_MINOR_REVISION);
    uint32_t var = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_VERSION_STATUS);
-   // p->gpu_id = (pid << 16) | ((maj & 0xff) << 8) | (min & 0xff);
-   p->gpu_id     = (pid << 16) | ((var & 0xf) << 12) | ((maj & 0xf) << 8) | (min & 0xff);
+
+   p->gpu_id = (pid << 16) | ((var & 0xf) << 12) | ((maj & 0xf) << 8) | (min & 0xff);
    p->gpu_variant = var;
 
-   uint32_t slo = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_SHADER_PRESENT_LO);
-   uint32_t shi = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_SHADER_PRESENT_HI);
-   p->shader_present = ((uint64_t)shi << 32) | slo;
+   mesa_logi("gpu_id=%lx gpu_variant=%u", p->gpu_id, p->gpu_variant);
 
-   p->tiler_features = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_TILER_FEATURES);
-   p->mem_features   = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_MEM_FEATURES);
-   p->mmu_features   = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_MMU_FEATURES);
+   p->shader_present = kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_SHADER_PRESENT);
 
-   for (unsigned i = 0; i < ARRAY_SIZE(p->texture_features); i++)
-      p->texture_features[i] =
-         (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_TEX_FEATURES_0 + i);
+   p->tiler_features = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_TILER_FEATURES);
+   p->mem_features   = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_MEM_FEATURES);
+   p->mmu_features   = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_MMU_FEATURES);
+
+   p->texture_features[0] = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_TEXTURE_FEATURES_0);
+   p->texture_features[1] = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_TEXTURE_FEATURES_1);
+   p->texture_features[2] = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_TEXTURE_FEATURES_2);
+   p->texture_features[3] = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_TEXTURE_FEATURES_3);
 
    p->max_threads_per_core =
-      (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_THREAD_MAX_THREADS);
+      (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_THREAD_MAX_THREADS);
    if (!p->max_threads_per_core) p->max_threads_per_core = 256;
 
    p->max_threads_per_wg =
-      (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_THREAD_MAX_WORKGROUP_SIZE);
+      (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_THREAD_MAX_WORKGROUP_SIZE);
    if (!p->max_threads_per_wg) p->max_threads_per_wg = p->max_threads_per_core;
 
-   uint32_t tf = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_THREAD_FEATURES);
+   uint32_t tf = (uint32_t)kbase_query_gpuprop(fd, KBASE_GPUPROP_RAW_THREAD_FEATURES);
    p->max_tasks_per_core     = MAX2(tf >> 24, 1);
    p->num_registers_per_core = tf & 0xffff;
    if (!p->num_registers_per_core)
       p->num_registers_per_core = p->max_threads_per_core * 32;
 
    p->max_tls_instance_per_core = p->max_threads_per_core;
-
-   kd->gpu_info.cycle_freq =
-      kbase_query_gpuprop(fd, KBASE_GPUPROP_CYCLE_COUNTER_FREQUENCY);
-   if (kd->gpu_info.cycle_freq) {
-      p->gpu_can_query_timestamp     = true;
-      p->timestamp_frequency         = kd->gpu_info.cycle_freq;
-      p->timestamp_device_coherent    = true;
-      p->timestamp_cycles_to_ns_factor =
-         (double)1000000000L / p->timestamp_frequency;
-   }
 
    p->supported_bo_flags =
       PAN_KMOD_BO_FLAG_EXECUTABLE | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT |
@@ -343,6 +204,7 @@ static struct pan_kmod_dev *
 kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
                       const struct pan_kmod_allocator *allocator)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_ioctl_version_check vc = { .major = 11, .minor = 38 };
    if (kbase_ioctl(fd, KBASE_IOCTL_VERSION_CHECK, &vc) < 0) {
       mesa_loge("kbase: VERSION_CHECK failed (err=%d)", errno);
@@ -372,6 +234,7 @@ kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
 static void
 kbase_kmod_dev_destroy(struct pan_kmod_dev *dev)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_dev *kd = container_of(dev, struct kbase_kmod_dev, base);
    pan_kmod_dev_cleanup(dev);
    pan_kmod_free(dev->allocator, kd);
@@ -400,6 +263,7 @@ pan_flags_to_kbase(uint32_t f)
                 BASE_MEM_SAME_VA;
    if (f & PAN_KMOD_BO_FLAG_EXECUTABLE)     k |= BASE_MEM_PROT_GPU_EX;
    if (f & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) k |= BASE_MEM_GROW_ON_GPF;
+   if (f & PAN_KMOD_BO_FLAG_GPU_UNCACHED)  k |= BASE_MEM_UNCACHED_GPU;
    return k;
 }
 
@@ -407,6 +271,7 @@ static struct pan_kmod_bo *
 kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
                     uint64_t size, uint32_t flags)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_bo *kbo = pan_kmod_dev_alloc(dev, sizeof(*kbo));
    if (!kbo) return NULL;
 
@@ -415,21 +280,21 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
    uint64_t cookie = 0;
    int ret = -1;
 
-   /* 1. Try modern 64-byte MEM_ALLOC_EX (0xc040803b, ioctl 59) */
-   struct kbase_ioctl_mem_alloc_ex a_ex = {
-      .va_pages     = pages,
-      .commit_pages = (flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) ? 0 : pages,
-      .extension    = (flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) ? pages : 0,
-      .flags        = kflags,
-      .fixed_va     = 0,
-      .extra        = {0, 0, 0},
+   union kbase_ioctl_mem_alloc_ex a_ex = {
+      .in = {
+         .va_pages      = pages,
+         .commit_pages  = (flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) ? 0 : pages,
+         .extension     = (flags & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) ? pages : 0,
+         .flags         = kflags,
+         .fixed_address = 0,
+         .extra         = {0, 0, 0},
+      },
    };
 
    ret = kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC_EX, &a_ex);
    if (ret == 0) {
-      cookie = a_ex.commit_pages; /* Out: gpu_va cookie is returned at offset 0x08 */
+      cookie = a_ex.out.gpu_va; /* Output cookie/address is at offset 0x08 in .out */
    } else {
-      /* 2. Fallback to legacy 32-byte MEM_ALLOC (0xc0208005, ioctl 5) */
       union kbase_ioctl_mem_alloc a = {
          .in = {
             .va_pages     = pages,
@@ -445,7 +310,7 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
       }
    }
 
-   if (ret < 0) {
+   if (ret < 0 || !cookie) {
       mesa_loge("kbase: MEM_ALLOC size=%"PRIu64" failed (err=%d)", size, errno);
       pan_kmod_dev_free(dev, kbo);
       return NULL;
@@ -454,18 +319,22 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
    kbo->cpu_ptr = MAP_FAILED;
 
    /* mmap the returned cookie to acquire identical CPU/GPU virtual address */
-   void *p = mmap(NULL, pages * 4096, PROT_READ | PROT_WRITE, MAP_SHARED,
-                  dev->fd, (off_t)cookie);
-
-   if (p != MAP_FAILED) {
-      kbo->gpu_va  = (uintptr_t)p;
-      kbo->cpu_ptr = p;
+   if (flags & PAN_KMOD_BO_FLAG_NO_MMAP) {
+      kbo->gpu_va = cookie;
    } else {
-      mesa_loge("kbase: mmap failed for cookie 0x%"PRIx64" (err=%d)", cookie, errno);
-      struct kbase_ioctl_mem_free mf = { .gpu_addr = cookie };
-      kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &mf);
-      pan_kmod_dev_free(dev, kbo);
-      return NULL;
+      void *p = mmap(NULL, pages * 4096, PROT_READ | PROT_WRITE, MAP_SHARED,
+                     dev->fd, (off_t)cookie);
+
+      if (p != MAP_FAILED) {
+         kbo->gpu_va  = (uintptr_t)p;
+         kbo->cpu_ptr = p;
+      } else {
+         mesa_loge("kbase: mmap failed for cookie 0x%"PRIx64" (err=%d)", cookie, errno);
+         struct kbase_ioctl_mem_free mf = { .gpu_addr = cookie };
+         kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_FREE, &mf);
+         pan_kmod_dev_free(dev, kbo);
+         return NULL;
+      }
    }
 
    kbo->exported  = false;
@@ -479,13 +348,29 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
 static void
 kbase_kmod_bo_free(struct pan_kmod_bo *bo)
 {
+   mesa_logi("%s @ %d: handle=%p", __func__, __LINE__, bo);
    struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
-   if (kbo->dmabuf_fd >= 0) close(kbo->dmabuf_fd);
-   if (kbo->cpu_ptr != MAP_FAILED) munmap(kbo->cpu_ptr, bo->size);
 
-   struct kbase_ioctl_mem_free mf = { .gpu_addr = kbo->gpu_va };
-   if (kbase_ioctl(bo->dev->fd, KBASE_IOCTL_MEM_FREE, &mf) < 0)
-      mesa_logw("kbase: MEM_FREE 0x%"PRIx64" failed (err=%d)", kbo->gpu_va, errno);
+   pan_kmod_bo_cleanup(bo);
+
+   mesa_logi("%s @ %d: gpuva=%lx", __func__, __LINE__, kbo->gpu_va);
+   if (kbo->dmabuf_fd >= 0) {
+      close(kbo->dmabuf_fd);
+      kbo->dmabuf_fd = -1;
+   }
+
+   if (kbo->cpu_ptr != NULL && kbo->cpu_ptr != MAP_FAILED) {
+      munmap(kbo->cpu_ptr, bo->size);
+      kbo->cpu_ptr = MAP_FAILED;
+   }
+
+   if (kbo->gpu_va != 0 && !(bo->flags & PAN_KMOD_BO_FLAG_IMPORTED)) {
+      struct kbase_ioctl_mem_free mf = { .gpu_addr = kbo->gpu_va };
+      if (kbase_ioctl(bo->dev->fd, KBASE_IOCTL_MEM_FREE, &mf) < 0) {
+         mesa_logw("kbase: MEM_FREE 0x%"PRIx64" failed (err=%d, %s)",
+                     kbo->gpu_va, errno, strerror(errno));
+      }
+   }
 
    pan_kmod_dev_free(bo->dev, kbo);
 }
@@ -494,39 +379,69 @@ static struct pan_kmod_bo *
 kbase_kmod_bo_import(struct pan_kmod_dev *dev, uint32_t handle, uint64_t size)
 {
    int dfd = (int)handle;
+   mesa_logi("kbase_kmod_bo_import: handle=%d", dfd);
+
    struct kbase_kmod_bo *kbo = pan_kmod_dev_alloc(dev, sizeof(*kbo));
    if (!kbo) return NULL;
 
-   union kbase_ioctl_mem_import mi = {
-      .in = {
-         .phandle = (uint64_t)(uintptr_t)&dfd,
-         .type    = BASE_MEM_IMPORT_TYPE_UMM,
-         .flags   = BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
-                    BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
-                    BASE_MEM_SAME_VA,
-      }
+   static const uint64_t import_flags_try[] = {
+      BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
+      BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR | BASE_MEM_COHERENT_LOCAL,
+
+      // Uncached fallback
+      BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
+      BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR | BASE_MEM_COHERENT_LOCAL | BASE_MEM_UNCACHED_GPU,
+
+      // Basic fallback
+      BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
+      BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR,
+
+      // Device-local fallback
+      BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR | BASE_MEM_COHERENT_LOCAL,
    };
 
-   if (kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &mi) < 0) {
-      mesa_loge("kbase: MEM_IMPORT failed (err=%d)", errno);
+   int ret = -1;
+   union kbase_ioctl_mem_import mi;
+
+   for (unsigned i = 0; i < 4; i++) {
+      memset(&mi, 0, sizeof(mi));
+      mi.in.flags   = import_flags_try[i];
+      mi.in.phandle = (uint64_t)(uintptr_t)&dfd;
+      mi.in.type    = BASE_MEM_IMPORT_TYPE_UMM; /* 2 */
+
+      ret = kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_IMPORT, &mi);
+      if (ret == 0)
+         break;
+   }
+
+   if (ret < 0) {
+      mesa_loge("kbase: MEM_IMPORT failed for fd %d (err=%d)", dfd, errno);
       pan_kmod_dev_free(dev, kbo);
       return NULL;
    }
 
-   kbo->gpu_va    = mi.out.gpu_va;
+   uint64_t gpu_va = mi.out.gpu_va;
+   kbo->gpu_va    = gpu_va;
    kbo->cpu_ptr   = MAP_FAILED;
    kbo->exported  = false;
    kbo->dmabuf_fd = dup(dfd);
 
-   pan_kmod_bo_init(&kbo->base, dev, NULL, mi.out.va_pages * 4096,
+   uint64_t imported_size = mi.out.va_pages * 4096;
+   if (!imported_size && size > 0)
+      imported_size = size;
+
+   mesa_logi("%s: imported_size=%lu", __func__, imported_size);
+
+   pan_kmod_bo_init(&kbo->base, dev, NULL, imported_size,
                     PAN_KMOD_BO_FLAG_IMPORTED,
-                    (uint32_t)(kbo->gpu_va & 0xFFFFFFFF));
+                    handle); // handles are fds instead of VAs
    return &kbo->base;
 }
 
 static int
 kbase_kmod_bo_export(struct pan_kmod_bo *bo, int unused_fd)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
    (void)unused_fd;
 
@@ -561,6 +476,7 @@ kbase_kmod_bo_export(struct pan_kmod_bo *bo, int unused_fd)
 static off_t
 kbase_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
    return (off_t)kbo->gpu_va;
 }
@@ -568,6 +484,7 @@ kbase_kmod_bo_get_mmap_offset(struct pan_kmod_bo *bo)
 static int
 kbase_kmod_flush_bo_map_syncs(struct pan_kmod_dev *dev)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    util_dynarray_foreach(&dev->pending_bo_syncs.array,
                          struct pan_kmod_deferred_bo_sync, sync) {
       struct kbase_kmod_bo *kbo = container_of(sync->bo, struct kbase_kmod_bo, base);
@@ -590,6 +507,7 @@ static bool
 kbase_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns,
                    bool for_read_only_access)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    (void)bo; (void)timeout_ns; (void)for_read_only_access;
    return true;
 }
@@ -597,6 +515,7 @@ kbase_kmod_bo_wait(struct pan_kmod_bo *bo, int64_t timeout_ns,
 static void
 kbase_kmod_bo_make_evictable(struct pan_kmod_bo *bo)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
    struct kbase_ioctl_mem_flags_change fc = {
       .gpu_va = kbo->gpu_va,
@@ -610,6 +529,7 @@ kbase_kmod_bo_make_evictable(struct pan_kmod_bo *bo)
 static bool
 kbase_kmod_bo_make_unevictable(struct pan_kmod_bo *bo)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
    struct kbase_ioctl_mem_flags_change fc = {
       .gpu_va = kbo->gpu_va,
@@ -631,6 +551,7 @@ static struct pan_kmod_vm *
 kbase_kmod_vm_create(struct pan_kmod_dev *dev, uint32_t flags,
                      uint64_t va_start, uint64_t va_range)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    (void)va_start; (void)va_range;
    struct kbase_kmod_vm *vm = pan_kmod_dev_alloc(dev, sizeof(*vm));
    if (!vm) return NULL;
@@ -642,6 +563,7 @@ kbase_kmod_vm_create(struct pan_kmod_dev *dev, uint32_t flags,
 static void
 kbase_kmod_vm_destroy(struct pan_kmod_vm *vm)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    pan_kmod_dev_free(vm->dev, vm);
 }
 
@@ -649,6 +571,7 @@ static int
 kbase_kmod_vm_bind(struct pan_kmod_vm *vm, enum pan_kmod_vm_op_mode mode,
                    struct pan_kmod_vm_op *ops, uint32_t op_count)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    (void)vm; (void)mode;
    for (uint32_t i = 0; i < op_count; i++) {
       if (ops[i].type == PAN_KMOD_VM_OP_TYPE_MAP) {
@@ -668,6 +591,7 @@ kbase_kmod_vm_bind(struct pan_kmod_vm *vm, enum pan_kmod_vm_op_mode mode,
 static uint64_t
 kbase_query_timestamp(const struct pan_kmod_dev *dev)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    union kbase_ioctl_get_cpu_gpu_timeinfo ti = {
       .in = { .request_flags = BASE_TIMEINFO_CYCLE_COUNTER_FLAG }
    };

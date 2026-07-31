@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
 #include <xf86drm.h>
@@ -135,6 +136,35 @@ pan_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *exclusive_vm,
    return bo;
 }
 
+int
+pan_kmod_bo_export(struct pan_kmod_bo *bo)
+{
+   PAN_TRACE_FUNC(PAN_TRACE_LIB_KMOD);
+
+   int fd;
+
+   if (bo->dev->ops == &kbase_kmod_ops) {
+      fd = bo->dev->ops->bo_export(bo, -1);
+      if (fd < 0) return -1;
+      bo->flags |= PAN_KMOD_BO_FLAG_EXPORTED;
+      return fd;
+   }
+
+   if (drmPrimeHandleToFD(bo->dev->fd, bo->handle, DRM_CLOEXEC | DRM_RDWR,
+                          &fd)) {
+      mesa_loge("drmPrimeHandleToFD() failed (err=%d)", errno);
+      return -1;
+   }
+
+   if (bo->dev->ops->bo_export && bo->dev->ops->bo_export(bo, fd)) {
+      close(fd);
+      return -1;
+   }
+
+   bo->flags |= PAN_KMOD_BO_FLAG_EXPORTED;
+   return fd;
+}
+
 void
 pan_kmod_bo_put(struct pan_kmod_bo *bo)
 {
@@ -152,6 +182,7 @@ pan_kmod_bo_put(struct pan_kmod_bo *bo)
 
    simple_mtx_lock(&dev->handle_to_bo.lock);
 
+   mesa_logi("%s @ %d", __FUNCTION__, __LINE__);
    /* If some import took a ref on this BO while we were trying to acquire the
     * lock, skip the destruction.
     */
@@ -167,6 +198,24 @@ pan_kmod_bo_put(struct pan_kmod_bo *bo)
    simple_mtx_unlock(&dev->handle_to_bo.lock);
 }
 
+static inline size_t
+get_dmabuf_size(int fd)
+{
+   struct stat st;
+   if (fstat(fd, &st) == 0 && st.st_size > 0)
+      return (size_t)st.st_size;
+
+   mesa_logi("fstat failed: errno=%d", errno);
+
+   off_t sz = lseek(fd, 0, SEEK_END);
+   if (sz != (off_t)-1 && sz > 0) {
+      lseek(fd, 0, SEEK_SET);
+      return (size_t)sz;
+   }
+
+   return 0;
+}
+
 struct pan_kmod_bo *
 pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
 {
@@ -176,9 +225,13 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
    simple_mtx_lock(&dev->handle_to_bo.lock);
 
    uint32_t handle;
-   int ret = drmPrimeFDToHandle(dev->fd, fd, &handle);
-   if (ret)
-      goto err_unlock;
+   if (dev->ops == &kbase_kmod_ops) {
+      handle = (uint32_t)fd; // handle is the fd itself for kbase
+   } else {
+      int ret = drmPrimeFDToHandle(dev->fd, fd, &handle);
+      if (ret)
+         goto err_unlock;
+   }
 
    slot = util_sparse_array_get(&dev->handle_to_bo.array, handle);
    if (!slot)
@@ -189,9 +242,9 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
 
       p_atomic_inc(&bo->refcnt);
    } else {
-      size_t size = lseek(fd, 0, SEEK_END);
-      if (size == 0 || size == (size_t)-1) {
-         mesa_loge("invalid dmabuf size");
+      size_t size = get_dmabuf_size(fd);
+      if ((size == 0 || size == (size_t)-1) && dev->ops != &kbase_kmod_ops) { // kbase does not need the size?
+         mesa_loge("invalid dmabuf size: %lu, errno=%d", size, errno);
          goto err_close_handle;
       }
 
@@ -209,7 +262,8 @@ pan_kmod_bo_import(struct pan_kmod_dev *dev, int fd)
    return bo;
 
 err_close_handle:
-   drmCloseBufferHandle(dev->fd, handle);
+   if (dev->ops != &kbase_kmod_ops)
+      drmCloseBufferHandle(dev->fd, handle);
 
 err_unlock:
    simple_mtx_unlock(&dev->handle_to_bo.lock);

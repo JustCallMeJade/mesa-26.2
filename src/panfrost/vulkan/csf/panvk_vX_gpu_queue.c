@@ -649,41 +649,57 @@ create_group(struct panvk_gpu_queue *queue,
    int ret = -1;
 
    if (phys_dev->kmod.is_kbase) {
-      uint8_t max_comp = util_bitcount64(phys_dev->compute_core_mask);
-      uint8_t max_frag = util_bitcount64(phys_dev->fragment_core_mask);
+      uint64_t comp_mask = phys_dev->compute_core_mask ? phys_dev->compute_core_mask : 1ull;
+      uint64_t frag_mask = phys_dev->fragment_core_mask ? phys_dev->fragment_core_mask : 1ull;
+
+      uint8_t max_comp = util_bitcount64(comp_mask);
+      uint8_t max_frag = util_bitcount64(frag_mask);
       if (shader_core_count) {
-         max_comp = MIN2(shader_core_count, max_comp);
-         max_frag = MIN2(shader_core_count, max_frag);
+         max_comp = MIN2((uint8_t)shader_core_count, max_comp);
+         max_frag = MIN2((uint8_t)shader_core_count, max_frag);
       }
 
-      // Try KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EX (ioctl 63, 0xc078803f)
-      struct kbase_ioctl_cs_queue_group_create_ex kgc_ex = {
-         .compute_core_mask  = phys_dev->compute_core_mask,
-         .fragment_core_mask = phys_dev->fragment_core_mask,
-         .tiler_core_mask    = 1,
-         .max_compute_cores  = max_comp,
-         .max_fragment_cores = max_frag,
-         .max_tiler_cores    = 1,
-         .priority           = group_priority,
+      // Try KBASE_IOCTL_CS_QUEUE_GROUP_CREATE
+      union kbase_ioctl_cs_queue_group_create kgc = {
+         .in = {
+            .tiler_mask    = 1ull,
+            .fragment_mask = frag_mask,
+            .compute_mask  = comp_mask,
+            .cs_min        = 1,
+            .priority      = 1, /* Medium priority */
+            .tiler_max     = 1,
+            .fragment_max  = max_frag,
+            .compute_max   = max_comp,
+            .padding       = {0},
+            .reserved      = 0,
+         },
       };
 
-      ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_EX, &kgc_ex);
+      ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &kgc);
       if (ret == 0) {
-         queue->group_handle = (uint32_t)(kgc_ex.compute_core_mask >> 32);
+         queue->group_handle = kgc.out.group_handle;
       } else {
-         struct kbase_ioctl_cs_queue_group_create kgc = {
-            .compute_core_mask  = phys_dev->compute_core_mask,
-            .fragment_core_mask = phys_dev->fragment_core_mask,
-            .tiler_core_mask    = 1,
-            .max_compute_cores  = max_comp,
-            .max_fragment_cores = max_frag,
-            .max_tiler_cores    = 1,
-            .priority           = group_priority,
+         // Try KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_6
+         union kbase_ioctl_cs_queue_group_create_1_6 kgc_1_6 = {
+            .in = {
+               .tiler_mask    = 1ull,
+               .fragment_mask = frag_mask,
+               .compute_mask  = comp_mask,
+               .cs_min        = 1,
+               .priority      = 1,
+               .tiler_max     = 1,
+               .fragment_max  = max_frag,
+               .compute_max   = max_comp,
+               .padding       = {0},
+            },
          };
 
-         ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE, &kgc);
+         ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_CREATE_1_6, &kgc_1_6);
          if (ret == 0) {
-            queue->group_handle = kgc.group_handle;
+            queue->group_handle = kgc_1_6.out.group_handle;
+         } else {
+            mesa_loge("KBASE_IOCTL_CS_QUEUE_GROUP_CREATE failed (err=%d, %s)",
+                        errno, strerror(errno));
          }
       }
    } else {
@@ -730,6 +746,23 @@ static void
 destroy_group(struct panvk_gpu_queue *queue)
 {
    const struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(queue->vk.base.device->physical);
+
+   if (phys_dev->kmod.is_kbase) {
+      struct kbase_ioctl_cs_queue_group_term term = {
+         .group_handle = (uint8_t)queue->group_handle,
+         .padding = {0},
+      };
+
+      int ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE, &term);
+      if (ret < 0) {
+         mesa_logw("KBASE_IOCTL_CS_QUEUE_GROUP_TERMINATE handle %u failed: %s (errno %d)",
+                   queue->group_handle, strerror(errno), errno);
+      }
+      return;
+   }
+
    struct drm_panthor_group_destroy gd = {
       .group_handle = queue->group_handle,
    };

@@ -470,6 +470,7 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
                                int fd,
                                VkMemoryFdPropertiesKHR *pMemoryFdProperties)
 {
+   mesa_logi("%s @ %d", __FUNCTION__, __LINE__);
    VK_FROM_HANDLE(panvk_device, device, _device);
    const struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(device->vk.physical);
@@ -477,8 +478,10 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
    assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
    struct pan_kmod_bo *bo = pan_kmod_bo_import(device->kmod.dev, fd);
-   if (!bo)
+   if (!bo){
+      mesa_logi("%s @ %d: failed to import BO from fd %d", __FUNCTION__, __LINE__, fd);
       return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   }
 
    pMemoryFdProperties->memoryTypeBits = 0;
 
@@ -507,6 +510,7 @@ panvk_GetMemoryFdPropertiesKHR(VkDevice _device,
    }
 
    pan_kmod_bo_put(bo);
+   mesa_logi("%s @ %d success", __FUNCTION__, __LINE__);
    return VK_SUCCESS;
 }
 

@@ -47,7 +47,16 @@ Libs: -lX11-xcb
 Cflags:
 EOF
 
-for lib in xcb xcb-randr xcb-dri3 xcb-present xcb-shm xcb-sync xshmfence xcb-xfixes;
+#android.hardware.graphics.mapper@4.0
+cat <<EOF > shims/android.hardware.graphics.mapper.pc
+Name: android.hardware.graphics.mapper
+Description: android.hardware.graphics.mapper
+Version: 4.0
+Libs: -landroid.hardware.graphics.mapper
+Cflags:
+EOF
+
+for lib in xcb xcb-randr xcb-dri3 xcb-present xcb-shm xcb-sync xshmfence xcb-xfixes gralloctypes hidlbase utils cutils hardware log sync nativewindow ui;
 do
 cat <<EOF > shims/$lib.pc
 Name: $lib

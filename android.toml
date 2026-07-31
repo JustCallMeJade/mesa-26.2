@@ -9,7 +9,7 @@ c = [ndk_bin / 'aarch64-linux-android30-clang', '-D__TERMUX__']
 cpp = [ndk_bin / 'aarch64-linux-android30-clang++',
         '-fno-exceptions',
         '--start-no-unused-arguments',
-        '-static-libstdc++',
+        # '-static-libstdc++', # gralloc 4/5 needs to use std::__1::string/vector from libc++
         '--end-no-unused-arguments',
         '-D__TERMUX__']
 ar = ndk_bin / 'llvm-ar'
@@ -31,9 +31,12 @@ pkg_config_libdir = working_dir / 'shims'
 c_args = ['-fno-emulated-tls', '-I' + working_dir / 'shims/include',
         '-DHAVE_STRUCT_TIMESPEC', '-DHAVE_DLFCN_H', '-UHAVE_SECURE_GETENV', '-UHAVE_QSORT_S',
         '-include', 'fcntl.h', '-include', 'time.h', '-Wl,-llog', '-Wl,-lsync', '-fvisibility=default']
-cpp_args = ['-fno-emulated-tls', '-I' + working_dir / 'shims/include',
+cpp_args = ['-include', working_dir / 'src/util/u_gralloc/force_aosp_abi.h',
+            '-D_LIBCPP_DISABLE_EXTERN_TEMPLATE',
+            '-fno-emulated-tls', '-I' + working_dir / 'shims/include',
             '-DHAVE_STRUCT_TIMESPEC', '-DHAVE_DLFCN_H', '-UHAVE_SECURE_GETENV', '-UHAVE_QSORT_S',
-            '-include', 'fcntl.h', '-include', 'time.h', '-include', 'dlfcn.h', '-Wl,-llog', '-Wl,-lsync', '-fvisibility=default']
+            '-include', 'fcntl.h', '-include', 'time.h', '-include', 'dlfcn.h', '-Wl,-llog', '-Wl,-lsync', '-fvisibility=default',
+            '-D_LIBCPP_ABI_NAMESPACE=__1']
 c_link_args = ['-Wl,--allow-shlib-undefined',
                 '-L' + working_dir / 'shims',
                 '-L' + ndk_home / 'toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18/lib/linux/aarch64',

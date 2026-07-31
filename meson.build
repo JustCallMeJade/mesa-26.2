@@ -1064,6 +1064,18 @@ if with_platform_android
       dep_android += dep_hwvulkan_headers
     endif
   endif
+
+  # Need to link for gralloc
+  dep_android = [
+    dependency('cutils'),
+    dependency('hardware'),
+    dependency('log'),
+    dependency('sync'),
+  ]
+  if get_option('platform-sdk-version') >= 30
+    dep_android_mapper4 = dependency('android.hardware.graphics.mapper', version : '>= 4.0', required : true)
+  endif
+
   pre_args += '-DANDROID_API_LEVEL=' + get_option('platform-sdk-version').to_string()
   if get_option('android-strict')
     pre_args += '-DANDROID_STRICT'
