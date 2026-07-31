@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include "kbase_uapi.h"
 #include "kbase_csf_uapi.h"
+#include "mali_base_csf_kernel.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -51,8 +52,36 @@ uint64_t kbase_kmod_job_submit(struct pan_kmod_dev *dev,
 uint64_t
 kbase_bo_gpu_va(const struct pan_kmod_bo *bo);
 
+// New (version 1.14 plus) uapi
+union kbase_ioctl_cs_tiler_heap_init_24 {
+   struct {
+      uint32_t chunk_size;       /* 0x00 */
+      uint32_t initial_chunks;   /* 0x04 */
+      uint32_t max_chunks;       /* 0x08 */
+      uint16_t target_in_flight; /* 0x0C */
+      uint8_t  group_id;          /* 0x0E */
+      uint8_t  padding;           /* 0x0F */
+      uint64_t heap_ctx_gpu_va;  /* 0x10 */
+   } in;
+   struct {
+      uint64_t gpu_heap_va;      /* 0x00 */
+      uint64_t first_chunk_va;   /* 0x08 */
+   } out;
+};
+
+#define KBASE_IOCTL_CS_TILER_HEAP_INIT_24 \
+   _IOWR(KBASE_IOCTL_TYPE, 48, union kbase_ioctl_cs_tiler_heap_init_24)
+
 int
 kbase_ioctl(int fd, unsigned long req, void *arg);
+
+struct kbase_kmod_bo {
+   struct pan_kmod_bo base;
+   uint64_t gpu_va;
+   void    *cpu_ptr;   /* MAP_FAILED when unmapped */
+   bool     exported;
+   int      dmabuf_fd;
+};
 
 #ifdef __cplusplus
 } /* extern "C" */

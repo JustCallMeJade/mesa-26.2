@@ -28,11 +28,13 @@
 #include "util/u_dynarray.h"
 #include "util/u_math.h"
 
+#include "mali_base_csf_kernel.h"
 #include "pan_kmod_backend.h"
 #include "kbase_kmod.h"
 #include "mali_base_kernel.h"
 #include "kbase_uapi.h"
 #include "kbase_csf_uapi.h"
+#include "pan_trace.h"
 
 /* ============================================================
  * mali_kbase ioctl definitions (Type 0x80)
@@ -67,14 +69,6 @@ struct kbase_kmod_dev {
 
 struct kbase_kmod_vm {
    struct pan_kmod_vm base;
-};
-
-struct kbase_kmod_bo {
-   struct pan_kmod_bo base;
-   uint64_t gpu_va;
-   void    *cpu_ptr;   /* MAP_FAILED when unmapped */
-   bool     exported;
-   int      dmabuf_fd; /* -1 unless exported/imported */
 };
 
 /* ============================================================
@@ -200,6 +194,24 @@ kbase_dev_query_props(struct kbase_kmod_dev *kd)
    kd->gpu_info.minor_rev  = min;
 }
 
+static bool init_mem_jit(int drm_fd)
+{
+    struct kbase_ioctl_mem_jit_init jit_init = {
+        .va_pages        = 1 << 25,  // 128mb
+        .max_allocations = 255,
+        .trim_level      = 0,
+        .phys_pages      = 1 << 25,
+    };
+
+    int ret = kbase_ioctl(drm_fd, KBASE_IOCTL_MEM_JIT_INIT, &jit_init);
+    if (ret < 0) {
+        mesa_loge("KBASE_IOCTL_MEM_JIT_INIT failed (err=%d: %s)",
+                  errno, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
 static struct pan_kmod_dev *
 kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
                       const struct pan_kmod_allocator *allocator)
@@ -227,7 +239,7 @@ kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
    };
    pan_kmod_dev_init(&kd->base, fd, flags, &fv, &kbase_kmod_ops, allocator);
    kbase_dev_query_props(kd);
-
+   init_mem_jit(fd);
    return &kd->base;
 }
 
@@ -269,6 +281,7 @@ pan_flags_to_kbase(uint32_t f)
 
    if (f & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) k |= BASE_MEM_GROW_ON_GPF;
    if (f & PAN_KMOD_BO_FLAG_GPU_UNCACHED)  k |= BASE_MEM_UNCACHED_GPU;
+   if (f & PAN_KMOD_BO_FLAG_EVENT) k |= BASE_MEM_CSF_EVENT;
    return k;
 }
 
@@ -276,7 +289,8 @@ static struct pan_kmod_bo *
 kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
                     uint64_t size, uint32_t flags)
 {
-   mesa_logi("%s @ %d", __func__, __LINE__);
+   mesa_logi("%s @ %d: flags = %x, size = %lu", __func__, __LINE__, flags, size);
+   // print_stack_trace();
    struct kbase_kmod_bo *kbo = pan_kmod_dev_alloc(dev, sizeof(*kbo));
    if (!kbo) return NULL;
 
@@ -298,8 +312,10 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
 
    ret = kbase_ioctl(dev->fd, KBASE_IOCTL_MEM_ALLOC_EX, &a_ex);
    if (ret == 0) {
+      mesa_logi("kbase: MEM_ALLOC_EX succeeded, flags = %llx, cookie = %llx", a_ex.out.flags, a_ex.out.gpu_va);
       cookie = a_ex.out.gpu_va; /* Output cookie/address is at offset 0x08 in .out */
    } else {
+      mesa_logi("kbase: MEM_ALLOC_EX failed, falling back to MEM_ALLOC");
       union kbase_ioctl_mem_alloc a = {
          .in = {
             .va_pages     = pages,
@@ -330,6 +346,7 @@ kbase_kmod_bo_alloc(struct pan_kmod_dev *dev, struct pan_kmod_vm *vm,
       void *p = mmap(NULL, pages * 4096, PROT_READ | PROT_WRITE, MAP_SHARED,
                      dev->fd, (off_t)cookie);
 
+      mesa_logi("kbase: mmap cookie 0x%"PRIx64" -> %p", cookie, p);
       if (p != MAP_FAILED) {
          kbo->gpu_va  = (uintptr_t)p;
          kbo->cpu_ptr = p;

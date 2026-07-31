@@ -318,9 +318,35 @@ init_subqueue_tracing(struct panvk_gpu_queue *queue,
 static void
 finish_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
 {
-   panvk_pool_free_mem(&queue->subqueues[subqueue].context);
-   panvk_pool_free_mem(&queue->subqueues[subqueue].req_resource.buf);
-   panvk_pool_free_mem(&queue->subqueues[subqueue].regs_save);
+   struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   const struct panvk_physical_device *phys_dev =
+      to_panvk_physical_device(dev->vk.physical);
+   struct panvk_subqueue *subq = &queue->subqueues[subqueue];
+
+   if (phys_dev->kmod.is_kbase) {
+      if (subq->db_page) {
+         os_munmap(subq->db_page, 4096);
+         subq->db_page = NULL;
+      }
+
+      if (subq->kbase_cs_gpu_va) {
+         struct kbase_ioctl_cs_queue_terminate term = {
+            .buffer_gpu_addr = subq->kbase_cs_gpu_va,
+         };
+         kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_TERMINATE, &term);
+         subq->kbase_cs_gpu_va = 0;
+      }
+
+      if (subq->kbase_cs_bo) {
+         pan_kmod_bo_put(subq->kbase_cs_bo);
+         subq->kbase_cs_bo = NULL;
+      }
+   } else {
+      panvk_pool_free_mem(&subq->req_resource.buf);
+   }
+
+   panvk_pool_free_mem(&subq->context);
+   panvk_pool_free_mem(&subq->regs_save);
    finish_subqueue_tracing(queue, subqueue);
 }
 
@@ -365,6 +391,7 @@ get_resource_mask(enum panvk_subqueue_id subqueue)
 static VkResult
 init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
 {
+   mesa_logi("init_subqueue: subqueue=%d", subqueue);
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
    struct panvk_subqueue *subq = &queue->subqueues[subqueue];
    const struct panvk_physical_device *phys_dev =
@@ -391,20 +418,60 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
    struct panvk_pool *mempool =
       PANVK_DEBUG(TRACE) ? &dev->mempools.rw_nc : &dev->mempools.rw;
 
-   alloc_info.size = sizeof(uint64_t);
-   alloc_info.alignment = 64;
-   subq->req_resource.buf = panvk_pool_alloc_mem(mempool, alloc_info);
-   if (!panvk_priv_mem_check_alloc(subq->req_resource.buf))
-      return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                          "Failed to create a req_resource buffer");
+   // alloc_info.size = sizeof(uint64_t);
+   // alloc_info.alignment = 64;
+   // alloc_info.size = 4096;      /* 1 page */
+   // alloc_info.alignment = 4096; /* MUST be 4KB page-aligned for kbase */
+   // subq->req_resource.buf = panvk_pool_alloc_mem(mempool, alloc_info);
+   // if (!panvk_priv_mem_check_alloc(subq->req_resource.buf))
+   //    return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+   //                        "Failed to create a req_resource buffer");
+   void *cs_cpu_addr = NULL;
+   uint64_t cs_gpu_addr = 0;
+   uint64_t kbase_queue_gpu_va = 0;
+   const uint32_t kbase_queue_size = 65536;
+
+   if (phys_dev->kmod.is_kbase) {
+      subq->kbase_cs_bo = pan_kmod_bo_alloc(
+         dev->kmod.dev, dev->kmod.vm, kbase_queue_size, PAN_KMOD_BO_FLAG_GPU_UNCACHED);
+      if (!subq->kbase_cs_bo)
+         return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                              "Failed to create kbase CS queue BO");
+
+
+      struct kbase_kmod_bo *kbo = container_of(subq->kbase_cs_bo, struct kbase_kmod_bo, base);
+      subq->kbase_cs_cpu = kbo->cpu_ptr;
+      if (subq->kbase_cs_cpu == MAP_FAILED) {
+         subq->kbase_cs_cpu = NULL;
+         return panvk_errorf(dev, VK_ERROR_OUT_OF_HOST_MEMORY,
+                              "Failed to CPU map kbase CS queue BO");
+      }
+
+      // mesa_logi("  kbase_cs_cpu=%p, existing cpu_ptr=%p", subq->kbase_cs_cpu, kbo->cpu_ptr);
+
+      cs_cpu_addr = subq->kbase_cs_cpu;
+      cs_gpu_addr = (uintptr_t)subq->kbase_cs_cpu;
+      kbase_queue_gpu_va = (uintptr_t)subq->kbase_cs_cpu;
+      subq->kbase_cs_gpu_va = kbase_queue_gpu_va;
+   } else {
+      alloc_info.size = sizeof(uint64_t);
+      alloc_info.alignment = 64;
+      subq->req_resource.buf = panvk_pool_alloc_mem(mempool, alloc_info);
+      if (!panvk_priv_mem_check_alloc(subq->req_resource.buf))
+         return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                              "Failed to create a req_resource buffer");
+
+      cs_cpu_addr = panvk_priv_mem_host_addr(subq->req_resource.buf);
+      cs_gpu_addr = panvk_priv_mem_dev_addr(subq->req_resource.buf);
+   }
 
    struct cs_builder b;
    const struct drm_panthor_csif_info *csif_info =
       panthor_kmod_get_csif_props(dev->kmod.dev);
 
    struct cs_buffer root_cs = {
-      .cpu = panvk_priv_mem_host_addr(subq->req_resource.buf),
-      .gpu = panvk_priv_mem_dev_addr(subq->req_resource.buf),
+      .cpu = cs_cpu_addr,
+      .gpu = cs_gpu_addr,
       .capacity = 1,
    };
    struct cs_builder_conf conf = {
@@ -420,8 +487,10 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
    subq->req_resource.cs_buffer_size = cs_root_chunk_size(&b);
    subq->req_resource.cs_buffer_addr = cs_root_chunk_gpu_addr(&b);
    cs_builder_fini(&b);
-   panvk_priv_mem_flush(subq->req_resource.buf, 0,
-                        subq->req_resource.cs_buffer_size);
+   if (!phys_dev->kmod.is_kbase) {
+      panvk_priv_mem_flush(subq->req_resource.buf, 0,
+                           subq->req_resource.cs_buffer_size);
+   }
 
    alloc_info.size = sizeof(struct panvk_cs_subqueue_context);
    alloc_info.alignment = 64;
@@ -571,6 +640,64 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
 
    mesa_logi("init_subqueue: queue=%p, subqueue=%d", queue, subqueue);
 
+   if (phys_dev->kmod.is_kbase) {
+      uint32_t cs_queue_buf_size = ALIGN_POT(subq->req_resource.cs_buffer_size, 65536);
+      struct kbase_ioctl_cs_queue_register qreg = {
+         .buffer_gpu_addr = kbase_queue_gpu_va,
+         .buffer_size     = cs_queue_buf_size,
+         .priority        = 1,
+         .padding         = {0},
+      };
+
+      mesa_logi("KBASE_IOCTL_CS_QUEUE_REGISTER: buffer_gpu_addr=0x%llx, buffer_size=%u",
+                qreg.buffer_gpu_addr, cs_queue_buf_size);
+
+      int ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_REGISTER, &qreg);
+      if (ret < 0) {
+         return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
+                              "KBASE_IOCTL_CS_QUEUE_REGISTER for subqueue %d failed: %s (errno %d)",
+                              subqueue, strerror(errno), errno);
+      }
+
+      mesa_logi("KBASE_IOCTL_CS_QUEUE_REGISTER: succeeded");
+
+      union kbase_ioctl_cs_queue_bind qbind = {
+         .in = {
+            .buffer_gpu_addr = kbase_queue_gpu_va,
+            .group_handle    = (uint8_t)queue->group_handle,
+            .csi_index       = (uint8_t)subqueue, // 0=VT, 1=FRAG, 2=COMPUTE
+         },
+      };
+
+      mesa_logi("KBASE_IOCTL_CS_QUEUE_BIND: buffer_gpu_addr=0x%llx, group_handle=%u, csi_index=%u",
+                qbind.in.buffer_gpu_addr, qbind.in.group_handle, qbind.in.csi_index);
+
+      ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_BIND, &qbind);
+      if (ret < 0) {
+         return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
+                              "KBASE_IOCTL_CS_QUEUE_BIND for subqueue %d failed: %s (errno %d)",
+                              subqueue, strerror(errno), errno);
+      }
+      mesa_logi("KBASE_IOCTL_CS_QUEUE_BIND: succeeded");
+
+      subq->mmap_handle = qbind.out.mmap_handle;
+
+      if (subq->mmap_handle != 0) {
+         // Doorbell page
+         subq->db_page = os_mmap(NULL, 4096 * BASEP_QUEUE_NR_MMAP_USER_PAGES, PROT_READ | PROT_WRITE,
+                                 MAP_SHARED, dev->drm_fd,
+                                 (off_t)subq->mmap_handle);
+         if (subq->db_page == MAP_FAILED) {
+            subq->db_page = NULL;
+            mesa_logw("Failed to mmap doorbell page for subqueue %d (handle=0x%" PRIx64 ")",
+                        subqueue, subq->mmap_handle);
+         }
+      }
+
+      mesa_logi("Bound subqueue %d: group=%u, csi_index=%d, mmap_handle=0x%" PRIx64 ", db_page=%p",
+                  subqueue, queue->group_handle, subqueue, subq->mmap_handle, subq->db_page);
+   }
+
    if (PANVK_DEBUG(TRACE)) {
       pandecode_user_msg(dev->debug.decode_ctx, "Init subqueue %d binary\n\n",
                          subqueue);
@@ -667,7 +794,7 @@ create_group(struct panvk_gpu_queue *queue,
             .tiler_mask    = 1ull,
             .fragment_mask = frag_mask,
             .compute_mask  = comp_mask,
-            .cs_min        = 1,
+            .cs_min        = PANVK_SUBQUEUE_COUNT,
             .priority      = 1, /* Medium priority */
             .tiler_max     = 1,
             .fragment_max  = max_frag,
@@ -687,7 +814,7 @@ create_group(struct panvk_gpu_queue *queue,
                .tiler_mask    = 1ull,
                .fragment_mask = frag_mask,
                .compute_mask  = comp_mask,
-               .cs_min        = 1,
+               .cs_min        = PANVK_SUBQUEUE_COUNT,
                .priority      = 1,
                .tiler_max     = 1,
                .fragment_max  = max_frag,
@@ -741,6 +868,7 @@ create_group(struct panvk_gpu_queue *queue,
       return panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                           "Failed to create a scheduling group");
 
+   mesa_logi("%s: success, group_handle=%u", __func__, queue->group_handle);
    return VK_SUCCESS;
 }
 
@@ -777,6 +905,7 @@ destroy_group(struct panvk_gpu_queue *queue)
 static VkResult
 init_tiler(struct panvk_gpu_queue *queue)
 {
+   mesa_logi("%s @ %d", __func__, __LINE__);
    struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
    const struct panvk_physical_device *phys_dev =
       to_panvk_physical_device(dev->vk.physical);
@@ -814,45 +943,82 @@ init_tiler(struct panvk_gpu_queue *queue)
       goto err_free_desc;
    }
 
-   struct drm_panthor_tiler_heap_create thc = {0};
-   int ret = 0;
+   uint64_t heap_ctx_va = 0;
+   uint64_t first_chunk_va = 0;
+   uint32_t handle = 0;
+
    if (phys_dev->kmod.is_kbase) {
-      // Allocate the initial tiler chunk BO on kbase using pan_kmod_bo_alloc
-      struct pan_kmod_bo *tiler_chunk_bo =
-         pan_kmod_bo_alloc(dev->kmod.dev, dev->kmod.vm, tiler_heap->chunk_size,
-                           PAN_KMOD_BO_FLAG_NO_MMAP | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT);
-      if (!tiler_chunk_bo) {
-         result = panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                                 "Failed to allocate initial tiler chunk");
-         goto err_free_desc;
+      uint64_t heap_desc_gpu_va = panvk_priv_mem_dev_addr(tiler_heap->desc);
+      union kbase_ioctl_cs_tiler_heap_init_24 heap_init_24 = {
+         .in = {
+            .chunk_size       = tiler_heap->chunk_size,
+            .initial_chunks   = phys_dev->csf.tiler.initial_chunks,
+            .max_chunks       = phys_dev->csf.tiler.max_chunks,
+            .target_in_flight = 65535,
+            .group_id         = 0,
+            .heap_ctx_gpu_va  = heap_desc_gpu_va,
+         }
+      };
+
+      int ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_TILER_HEAP_INIT_24, &heap_init_24);
+      if (ret == 0) {
+         mesa_logi("kbase_ioctl_cs_tiler_heap_init_24 succeeded: heap_ctx_va=%lx, first_chunk_va=%lx",
+                    heap_init_24.out.gpu_heap_va, heap_init_24.out.first_chunk_va);
+         heap_ctx_va    = heap_init_24.out.gpu_heap_va;
+         first_chunk_va = heap_init_24.out.first_chunk_va;
+      } else {
+         mesa_logi("kbase_ioctl_cs_tiler_heap_init_24 failed (err=%d: %s)",
+                    errno, strerror(errno));
+         union kbase_ioctl_cs_tiler_heap_init heap_init_1_13 = {
+            .in = {
+               .chunk_size       = tiler_heap->chunk_size,
+               .initial_chunks   = phys_dev->csf.tiler.initial_chunks,
+               .max_chunks       = phys_dev->csf.tiler.max_chunks,
+               .target_in_flight = 65535,
+               .group_id         = 0,
+            }
+         };
+
+         ret = kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_TILER_HEAP_INIT, &heap_init_1_13); // 0xc0108030
+         if (ret < 0) {
+            result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
+                                    "KBASE_IOCTL_CS_TILER_HEAP_INIT failed (err=%d: %s)",
+                                    errno, strerror(errno));
+            goto err_free_desc;
+         }
+
+         heap_ctx_va    = heap_init_1_13.out.gpu_heap_va;
+         first_chunk_va = heap_init_1_13.out.first_chunk_va;
       }
-      thc.first_heap_chunk_gpu_va = kbase_bo_gpu_va(tiler_chunk_bo);
-      thc.tiler_heap_ctx_gpu_va   = thc.first_heap_chunk_gpu_va;
-      thc.handle                  = 1;
-      ret = 0;
+
+      handle = 1;
    } else {
-      thc = (struct drm_panthor_tiler_heap_create){
+      struct drm_panthor_tiler_heap_create thc = {
          .vm_id               = pan_kmod_vm_handle(dev->kmod.vm),
          .chunk_size          = tiler_heap->chunk_size,
          .initial_chunk_count = phys_dev->csf.tiler.initial_chunks,
          .max_chunks          = phys_dev->csf.tiler.max_chunks,
          .target_in_flight    = 65535,
       };
-      ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_CREATE, &thc);
+
+      int ret = pan_kmod_ioctl(dev->drm_fd, DRM_IOCTL_PANTHOR_TILER_HEAP_CREATE, &thc);
+      if (ret) {
+         result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
+                               "Failed to create a tiler heap context");
+         goto err_free_desc;
+      }
+
+      heap_ctx_va    = thc.tiler_heap_ctx_gpu_va;
+      first_chunk_va = thc.first_heap_chunk_gpu_va;
+      handle         = thc.handle;
    }
 
-   if (ret) {
-      result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
-                            "Failed to create a tiler heap context");
-      goto err_free_desc;
-   }
-
-   tiler_heap->context.handle = thc.handle;
-   tiler_heap->context.dev_addr = thc.tiler_heap_ctx_gpu_va;
+   tiler_heap->context.handle   = handle;
+   tiler_heap->context.dev_addr = heap_ctx_va;
 
    panvk_priv_mem_write_desc(tiler_heap->desc, 0, TILER_HEAP, cfg) {
       cfg.size = tiler_heap->chunk_size;
-      cfg.base = thc.first_heap_chunk_gpu_va;
+      cfg.base = first_chunk_va;
       cfg.bottom = cfg.base + 64;
       cfg.top = cfg.base + cfg.size;
    }
@@ -873,7 +1039,14 @@ cleanup_tiler(struct panvk_gpu_queue *queue)
       to_panvk_physical_device(dev->vk.physical);
    struct panvk_tiler_heap *tiler_heap = &queue->tiler_heap;
 
-   if (!phys_dev->kmod.is_kbase) {
+   if (phys_dev->kmod.is_kbase) {
+      if (tiler_heap->context.dev_addr) {
+         struct kbase_ioctl_cs_tiler_heap_term term = {
+            .gpu_heap_va = tiler_heap->context.dev_addr,
+         };
+         kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_TILER_HEAP_TERM, &term);
+      }
+   } else {
       struct drm_panthor_tiler_heap_destroy thd = {
          .handle = tiler_heap->context.handle,
       };
@@ -1563,7 +1736,8 @@ err_cleanup_tiler:
    cleanup_tiler(queue);
 
 err_destroy_syncobj:
-   drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
+   if (phys_dev->kmod.is_kbase)
+      drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
 
 err_finish_queue:
    vk_queue_finish(&queue->vk);

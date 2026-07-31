@@ -129,6 +129,9 @@ enum pan_kmod_bo_flags {
     * the KMD to force non-coherent mappings on IO coherent setup.
     */
    PAN_KMOD_BO_FLAG_IO_COHERENT = BITFIELD_BIT(7),
+
+   /*  */
+   PAN_KMOD_BO_FLAG_EVENT = BITFIELD_BIT(8),
 };
 
 /* Allowed group priority flags. */
@@ -727,29 +730,8 @@ pan_kmod_bo_make_unevictable(struct pan_kmod_bo *bo)
    return true;
 }
 
-static inline void *
-pan_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr)
-{
-   PAN_TRACE_FUNC(PAN_TRACE_LIB_KMOD);
-
-   off_t mmap_offset;
-
-   /* Don't bother trying an mmap() if it's not allowed. */
-   if (bo->flags & PAN_KMOD_BO_FLAG_NO_MMAP)
-      return MAP_FAILED;
-
-   mmap_offset = bo->dev->ops->bo_get_mmap_offset(bo);
-   if (mmap_offset < 0)
-      return MAP_FAILED;
-
-   host_addr =
-      os_mmap(host_addr, bo->size, prot, flags, bo->dev->fd, mmap_offset);
-   if (host_addr == MAP_FAILED)
-      mesa_loge("mmap(..., size=%" PRIu64 ", prot=%d, flags=0x%x) failed: %s",
-                bo->size, prot, flags, strerror(errno));
-
-   return host_addr;
-}
+void *
+pan_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr);
 
 static inline bool
 pan_kmod_can_sync_bo_map_from_userland(struct pan_kmod_dev *dev)

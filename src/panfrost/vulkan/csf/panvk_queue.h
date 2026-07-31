@@ -64,6 +64,12 @@ struct panvk_subqueue {
          void *host;
       } addr;
    } tracebuf;
+
+   struct pan_kmod_bo *kbase_cs_bo;
+   void *kbase_cs_cpu;
+   uint64_t kbase_cs_gpu_va;
+   uint64_t mmap_handle;
+   uint32_t *db_page; // doorbell pages
 };
 
 struct panvk_desc_ringbuf {

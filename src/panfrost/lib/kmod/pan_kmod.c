@@ -13,6 +13,7 @@
 #include "util/macros.h"
 #include "pan_kmod.h"
 #include "pan_kmod_backend.h"
+#include "kbase_kmod.h"
 
 extern const struct pan_kmod_ops panfrost_kmod_ops;
 extern const struct pan_kmod_ops panthor_kmod_ops;
@@ -372,4 +373,35 @@ pan_kmod_queue_bo_map_sync(struct pan_kmod_bo *bo, uint64_t bo_offset,
    util_dynarray_append(&dev->pending_bo_syncs.array, new_sync);
 
    simple_mtx_unlock(&dev->pending_bo_syncs.lock);
+}
+
+void *
+pan_kmod_bo_mmap(struct pan_kmod_bo *bo, int prot, int flags, void *host_addr)
+{
+   PAN_TRACE_FUNC(PAN_TRACE_LIB_KMOD);
+
+   off_t mmap_offset;
+
+   /* Don't bother trying an mmap() if it's not allowed. */
+   if (bo->flags & PAN_KMOD_BO_FLAG_NO_MMAP)
+      return MAP_FAILED;
+
+   if (bo->dev->ops == &kbase_kmod_ops) {
+      // kbase gpu va is always mapped to cpu va
+      struct kbase_kmod_bo *kbo = container_of(bo, struct kbase_kmod_bo, base);
+      if (kbo->cpu_ptr)
+         return kbo->cpu_ptr;
+   }
+
+   mmap_offset = bo->dev->ops->bo_get_mmap_offset(bo);
+   if (mmap_offset < 0)
+      return MAP_FAILED;
+
+   host_addr =
+      os_mmap(host_addr, bo->size, prot, flags, bo->dev->fd, mmap_offset);
+   if (host_addr == MAP_FAILED)
+      mesa_loge("mmap(..., size=%" PRIu64 ", prot=%d, flags=0x%x) failed: %s",
+                bo->size, prot, flags, strerror(errno));
+
+   return host_addr;
 }
