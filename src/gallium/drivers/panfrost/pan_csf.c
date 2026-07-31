@@ -842,6 +842,9 @@ csf_submit_wait_and_dump(struct panfrost_batch *batch,
                          const struct drm_panthor_group_submit *gsubmit,
                          uint32_t vm_sync_handle, uint64_t vm_sync_signal_point)
 {
+   mesa_logi("csf_submit_wait_and_dump: vm_sync_handle=%u, vm_sync_signal_point=%lu",
+             vm_sync_handle, vm_sync_signal_point);
+
    struct panfrost_context *ctx = batch->ctx;
    struct panfrost_device *dev = pan_device(ctx->base.screen);
    bool wait = (dev->debug & (PAN_DBG_TRACE | PAN_DBG_SYNC)) && !ctx->is_noop;
@@ -1816,6 +1819,7 @@ get_device_reset_status(struct pipe_context *pctx)
 int
 GENX(csf_init_context)(struct panfrost_context *ctx)
 {
+   mesa_logi("csf_init_context: ctx=%p", ctx);
    PAN_TRACE_FUNC(PAN_TRACE_GL_CSF);
 
    struct panfrost_screen *screen = pan_screen(ctx->base.screen);

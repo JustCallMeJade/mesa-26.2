@@ -1418,7 +1418,7 @@ static const struct drm_panthor_csif_info kbase_csif_info = {
    .csg_slot_count = 4,
    .cs_slot_count = 2,
    .cs_reg_count = 96,             /* 96 user registers (r0-r95) */
-   .unpreserved_cs_reg_count = 0,
+   .unpreserved_cs_reg_count = 0, //32?
    .scoreboard_slot_count = 8,     /* 8 scoreboard slots */
 };
 

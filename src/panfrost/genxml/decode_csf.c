@@ -1758,6 +1758,7 @@ no_interpret:
       qctx->in_exception_handler = false;
    }
 
+   fprintf(ctx->dump_stream, "FINISHED interpret_cs_instr\n");
    return true;
 }
 

@@ -569,6 +569,8 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
       drmSyncobjReset(dev->drm_fd, &queue->syncobj_handle, 1);
    }
 
+   mesa_logi("init_subqueue: queue=%p, subqueue=%d", queue, subqueue);
+
    if (PANVK_DEBUG(TRACE)) {
       pandecode_user_msg(dev->debug.decode_ctx, "Init subqueue %d binary\n\n",
                          subqueue);
@@ -576,7 +578,7 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
                           qsubmit.stream_size,
                           phys_dev->kmod.dev->props.gpu_id);
    }
-
+   mesa_logi("%s @ %d: success", __func__, __LINE__);
    return VK_SUCCESS;
 }
 
@@ -1471,6 +1473,7 @@ panvk_per_arch(gpu_queue_submit)(struct vk_queue *vk_queue, struct vk_queue_subm
    panvk_queue_submit_process_signals(&submit, vk_submit);
    panvk_queue_submit_process_debug(&submit, vk_submit);
 
+   mesa_logi("%s: submit %d cmdbufs", __func__, submit.qsubmit_count);
 out:
    panvk_queue_submit_cleanup_storage(&submit, &stack_storage);
    return result;

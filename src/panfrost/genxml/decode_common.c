@@ -155,6 +155,8 @@ void
 pandecode_inject_mmap(struct pandecode_context *ctx, uint64_t gpu_va, void *cpu,
                       unsigned sz, const char *name)
 {
+   if (!cpu || cpu == MAP_FAILED)
+      return;
    simple_mtx_lock(&ctx->lock);
 
    /* First, search if we already mapped this and are just updating an address */
@@ -226,16 +228,19 @@ pointer_as_memory_reference(struct pandecode_context *ctx, uint64_t ptr)
    return out;
 }
 
+void print_stack_trace();
+
 void
 pandecode_dump_file_open(struct pandecode_context *ctx)
 {
+   // print_stack_trace();
    simple_mtx_assert_locked(&ctx->lock);
 
    /* This does a os_get_option every frame, so it is possible to use
     * os_set_option to change the base at runtime.
     */
    const char *dump_file_base =
-      debug_get_option("PANDECODE_DUMP_FILE", "pandecode.dump");
+      debug_get_option("PANDECODE_DUMP_FILE", "stderr");
    if (!strcmp(dump_file_base, "stderr"))
       ctx->dump_stream = stderr;
    else if (!ctx->dump_stream) {

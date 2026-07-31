@@ -259,9 +259,14 @@ static uint64_t
 pan_flags_to_kbase(uint32_t f)
 {
    uint64_t k = BASE_MEM_PROT_CPU_RD | BASE_MEM_PROT_CPU_WR |
-                BASE_MEM_PROT_GPU_RD | BASE_MEM_PROT_GPU_WR |
+                BASE_MEM_PROT_GPU_RD |
                 BASE_MEM_SAME_VA;
-   if (f & PAN_KMOD_BO_FLAG_EXECUTABLE)     k |= BASE_MEM_PROT_GPU_EX;
+   if (f & PAN_KMOD_BO_FLAG_EXECUTABLE) {
+      k |= BASE_MEM_PROT_GPU_EX;
+   } else {
+      k |= BASE_MEM_PROT_GPU_WR;
+   }
+
    if (f & PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT) k |= BASE_MEM_GROW_ON_GPF;
    if (f & PAN_KMOD_BO_FLAG_GPU_UNCACHED)  k |= BASE_MEM_UNCACHED_GPU;
    return k;
