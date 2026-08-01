@@ -78,11 +78,11 @@ jobs:
 
           meson setup build --reconfigure \
               --cross-file android-cross.txt \
-              -Dbuildtype=${{ matrix.build-type }} \
-              -Dplatforms=android,x11 \
+              -Dbuildtype=debugoptimized \
+              -Dplatforms=android \
               -Dandroid-stub=true \
               -Dandroid-libbacktrace=disabled \
-              -Dplatform-sdk-version=30 \
+              -Dplatform-sdk-version=35 \
               -Dglx=disabled \
               -Dgbm=disabled \
               -Degl=disabled \
@@ -97,7 +97,9 @@ jobs:
               -Dmesa-clc=system \
               -Dprecomp-compiler=system \
               -Dvulkan-drivers=panfrost \
-              -Dllvm=disabled
+              -Dllvm=disabled \
+              -Dandroid-strict=false \
+              -Dstrip=true
 
       - name: Compile Project
         run: |
