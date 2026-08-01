@@ -7,10 +7,6 @@ jobs:
   build-android-wrapper:
     runs-on: ubuntu-latest
 
-    strategy:
-          matrix:
-            build-type: [debugoptimized, release]
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
