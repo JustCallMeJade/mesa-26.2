@@ -6,7 +6,11 @@ on:
 jobs:
   build-android-wrapper:
     runs-on: ubuntu-latest
-
+    
+    strategy:
+     matrix:
+      platforms: ["android,x11", "android", "x11"]
+      
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
