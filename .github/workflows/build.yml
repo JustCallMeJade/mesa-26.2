@@ -7,10 +7,6 @@ jobs:
   build-android-wrapper:
     runs-on: ubuntu-latest
 
-    strategy:
-          matrix:
-            build-type: [debugoptimized, release]
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -79,7 +75,7 @@ jobs:
 
           meson setup build --reconfigure \
               --cross-file android-cross.txt \
-              -Dbuildtype=${{ matrix.build-type }} \
+              -Dbuildtype=debugoptimized \
               -Dplatforms=x11 \
               -Dandroid-stub=true \
               -Dandroid-libbacktrace=disabled \
@@ -98,7 +94,8 @@ jobs:
               -Dmesa-clc=system \
               -Dprecomp-compiler=system \
               -Dvulkan-drivers=panfrost \
-              -Dllvm=disabled
+              -Dllvm=disabled \
+              -Dstrip=true
 
       - name: Compile Project
         run: |
