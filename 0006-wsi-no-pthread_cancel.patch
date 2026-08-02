@@ -1,4 +1,5 @@
-+++ ./src/vulkan/wsi/wsi_common_display.c
+--- a/src/vulkan/wsi/wsi_common_display.c
++++ b/src/vulkan/wsi/wsi_common_display.c
 @@ -176,6 +176,12 @@
  
  static uint64_t fence_sequence;
