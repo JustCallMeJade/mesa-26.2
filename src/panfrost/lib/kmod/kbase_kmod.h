@@ -10,6 +10,14 @@
 #include "kbase_uapi.h"
 #include "kbase_csf_uapi.h"
 #include "mali_base_csf_kernel.h"
+#include "mali_kbase_csf_registers.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+#define memory_barrier() __sync_synchronize()
+#else
+#include <stdatomic.h>
+#define memory_barrier() atomic_thread_fence(memory_order_seq_cst)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,6 +30,17 @@ extern "C" {
  * instead of upstream Panfrost/Panthor DRM.
  */
 extern const struct pan_kmod_ops kbase_kmod_ops;
+
+struct kbase_kmod_dev {
+   struct pan_kmod_dev base;
+   struct {
+      uint32_t product_id;
+      uint32_t major_rev;
+      uint32_t minor_rev;
+      uint64_t cycle_freq;
+   } gpu_info;
+   bool allow_cs_groups;
+};
 
 /**
  * struct base_external_resource - external dma-buf resource for job submission.
@@ -82,6 +101,45 @@ struct kbase_kmod_bo {
    bool     exported;
    int      dmabuf_fd;
 };
+
+#ifndef KBASE_PAGE_SIZE
+#define KBASE_PAGE_SIZE 4096
+#endif
+
+static inline volatile uint64_t *
+kbase_user_cs_insert_ptr(void *db_page, uint32_t subqueue)
+{
+   uintptr_t base = (uintptr_t)db_page + KBASE_PAGE_SIZE;
+   uintptr_t offset = (subqueue * CS_USER_INPUT_BLOCK_SIZE) + CS_INSERT_LO;
+   return (volatile uint64_t *)(base + offset);
+}
+
+static inline volatile uint64_t *
+kbase_user_cs_extract_ptr(void *db_page, uint32_t subqueue)
+{
+   uintptr_t base = (uintptr_t)db_page + KBASE_PAGE_SIZE * 2;
+   uintptr_t offset = (subqueue * CS_USER_INPUT_BLOCK_SIZE) + CS_EXTRACT_LO;
+   return (volatile uint64_t *)(base + offset);
+}
+
+static inline bool
+kbase_user_cs_active(void *db_page, uint32_t subqueue)
+{
+   uintptr_t base = (uintptr_t)db_page + KBASE_PAGE_SIZE * 2;
+   uintptr_t offset = (subqueue * CS_USER_INPUT_BLOCK_SIZE) + CS_ACTIVE;
+   volatile uint32_t *active_reg = (volatile uint32_t *)(base + offset);
+   memory_barrier();
+   return (*active_reg & CS_ACTIVE_HW_ACTIVE_MASK) != 0;
+}
+
+static inline void
+kbase_ring_user_doorbell(void *db_page)
+{
+   volatile uint32_t *db_reg = (volatile uint32_t *)((uint8_t *)db_page + DB_BLK_DOORBELL);
+   memory_barrier();
+   *db_reg = 1;
+   memory_barrier();
+}
 
 #ifdef __cplusplus
 } /* extern "C" */

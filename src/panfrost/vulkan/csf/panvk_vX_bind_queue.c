@@ -452,7 +452,16 @@ panvk_per_arch(create_bind_queue)(struct panvk_device *dev,
    if (result != VK_SUCCESS)
       goto err_free_queue;
 
-   int ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
+   struct panvk_physical_device *phys_dev =
+         to_panvk_physical_device(dev->vk.physical);
+
+   int ret = 0;
+   if (phys_dev->kmod.is_kbase) {
+      queue->syncobj_handle = 1; // TODO(leegao): fix this
+   } else {
+      ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
+   }
+
    if (ret) {
       result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                             "Failed to create our internal sync object");

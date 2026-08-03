@@ -57,16 +57,6 @@ struct kbase_ioctl_mem_share {
 
 const struct pan_kmod_ops kbase_kmod_ops;
 
-struct kbase_kmod_dev {
-   struct pan_kmod_dev base;
-   struct {
-      uint32_t product_id;
-      uint32_t major_rev;
-      uint32_t minor_rev;
-      uint64_t cycle_freq;
-   } gpu_info;
-};
-
 struct kbase_kmod_vm {
    struct pan_kmod_vm base;
 };
@@ -217,10 +207,15 @@ kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
                       const struct pan_kmod_allocator *allocator)
 {
    mesa_logi("%s @ %d", __func__, __LINE__);
-   struct kbase_ioctl_version_check vc = { .major = 11, .minor = 38 };
+   struct kbase_ioctl_version_check vc = { 0 };
    if (kbase_ioctl(fd, KBASE_IOCTL_VERSION_CHECK, &vc) < 0) {
       mesa_loge("kbase: VERSION_CHECK failed (err=%d)", errno);
+   } else {
+      mesa_logi("kbase: VERSION_CHECK succeeded (major=%u minor=%u)", vc.major, vc.minor);
    }
+
+   // In version 35, we can map a single cs queue into multiple independent subqueues (groups)
+   const bool group_shared_io_pages = (vc.major > 1) || (vc.major == 1 && vc.minor >= 35);
 
    struct kbase_ioctl_set_flags sf = { .create_flags = 0 };
    if (kbase_ioctl(fd, KBASE_IOCTL_SET_FLAGS, &sf) < 0) {
@@ -240,6 +235,7 @@ kbase_kmod_dev_create(int fd, uint32_t flags, const struct pan_kmod_driver * _,
    pan_kmod_dev_init(&kd->base, fd, flags, &fv, &kbase_kmod_ops, allocator);
    kbase_dev_query_props(kd);
    init_mem_jit(fd);
+   kd->allow_cs_groups = group_shared_io_pages;
    return &kd->base;
 }
 

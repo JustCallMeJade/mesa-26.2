@@ -65,11 +65,14 @@ struct panvk_subqueue {
       } addr;
    } tracebuf;
 
-   struct pan_kmod_bo *kbase_cs_bo;
+   struct pan_kmod_bo *kbase_cs_bo; // csf command ring buffer
    void *kbase_cs_cpu;
    uint64_t kbase_cs_gpu_va;
    uint64_t mmap_handle;
    uint32_t *db_page; // doorbell pages
+
+   uint32_t kbase_cs_insert; // current write offset into kbase_cs_bo
+   uint32_t kbase_cs_size;   // size of the ring buffer (64KB)
 };
 
 struct panvk_desc_ringbuf {
