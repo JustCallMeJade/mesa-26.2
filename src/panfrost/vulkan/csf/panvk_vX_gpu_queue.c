@@ -18,6 +18,7 @@
 
 #include "pan_trace.h"
 
+#include "util/macros.h"
 #include "util/bitscan.h"
 #include "vk_drm_syncobj.h"
 #include "vk_log.h"
@@ -26,6 +27,10 @@
 #define DEFAULT_DESC_TRACEBUF_SIZE (2 * 1024 * 1024)
 #define MIN_CS_TRACEBUF_SIZE (512 * 1024)
 #define DEFAULT_CS_TRACEBUF_SIZE (2 * 1024 * 1024)
+
+static VkResult
+kbase_subqueue_submit(struct panvk_gpu_queue *queue, uint32_t subqueue,
+                       uint64_t stream_addr, uint32_t stream_size);
 
 static void
 finish_render_desc_ringbuf(struct panvk_gpu_queue *queue)
@@ -432,6 +437,9 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
    const uint32_t kbase_queue_size = 65536;
 
    if (phys_dev->kmod.is_kbase) {
+      subq->kbase_cs_size = kbase_queue_size;
+      subq->kbase_cs_insert = 0;
+
       subq->kbase_cs_bo = pan_kmod_bo_alloc(
          dev->kmod.dev, dev->kmod.vm, kbase_queue_size, PAN_KMOD_BO_FLAG_GPU_UNCACHED);
       if (!subq->kbase_cs_bo)
@@ -691,6 +699,17 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
             subq->db_page = NULL;
             mesa_logw("Failed to mmap doorbell page for subqueue %d (handle=0x%" PRIx64 ")",
                         subqueue, subq->mmap_handle);
+         }
+
+         VkResult init_res = kbase_subqueue_submit(queue, subqueue,
+                                                   cs_root_chunk_gpu_addr(&b),
+                                                   cs_root_chunk_size(&b));
+         if (init_res != VK_SUCCESS) {
+            mesa_logw("%s: kbase_subqueue_submit failed with error %d", __func__, init_res);
+            cs_builder_fini(&b);
+            return init_res;
+         } else {
+            mesa_logi("%s: kbase_subqueue_submit succeeded", __func__);
          }
       }
 
@@ -1443,6 +1462,109 @@ panvk_queue_submit_init_signals(struct panvk_queue_submit *submit,
    }
 }
 
+static void
+kbase_debug_cs_regs(const char* label, struct panvk_subqueue *subq, uint32_t csi_index)
+{
+   uint64_t cs_insert = *kbase_user_cs_insert_ptr(subq->db_page, csi_index);
+   uint64_t cs_extract = *kbase_user_cs_extract_ptr(subq->db_page, csi_index);
+   bool cs_active = kbase_user_cs_active(subq->db_page, csi_index);
+
+   mesa_logi("kbase_debug_cs_regs for %s (csi_idx %d, db_page %p, mmap %lx): insert=0x%lx extract=0x%lx active=%d",
+              label, csi_index, subq->db_page, subq->mmap_handle, cs_insert, cs_extract, cs_active);
+}
+
+static VkResult
+kbase_subqueue_submit(struct panvk_gpu_queue *queue, uint32_t subqueue,
+                       uint64_t stream_addr, uint32_t stream_size)
+{
+   mesa_logi("%s: subqueue %d, submit stream_addr=%lx stream_size=%d", __func__, subqueue, stream_addr, stream_size);
+   struct panvk_device *dev = to_panvk_device(queue->vk.base.device);
+   struct panvk_subqueue *subq = &queue->subqueues[subqueue];
+   struct kbase_kmod_dev *kdev = container_of(dev->kmod.dev, struct kbase_kmod_dev, base);
+   uint32_t physical_csi_idx = kdev->allow_cs_groups ? subqueue : 0;
+
+   if (!stream_size)
+      return VK_SUCCESS;
+   if (!subq->db_page)
+      return panvk_errorf(dev, VK_ERROR_DEVICE_LOST,
+                           "kbase CS queue %d has no doorbell mapping", subqueue);
+
+   const struct drm_panthor_csif_info *csif_info =
+      panthor_kmod_get_csif_props(dev->kmod.dev);
+   uint8_t nr_kernel_registers = MAX2(csif_info->unpreserved_cs_reg_count, 4);
+   uint8_t nr_registers = csif_info->cs_reg_count;
+
+   const uint32_t trampoline_max_instrs = 3; /* MOVE48 + MOVE32 + CALL */
+
+   if (subq->kbase_cs_insert +
+          (trampoline_max_instrs * sizeof(uint64_t)) > subq->kbase_cs_size) {
+      // TODO(leegao): implement proper wraparound
+      subq->kbase_cs_insert = 0;
+   }
+
+   struct cs_buffer ring_view = {
+      .cpu = (uint64_t *)((uint8_t *)subq->kbase_cs_cpu + subq->kbase_cs_insert),
+      .gpu = subq->kbase_cs_gpu_va + subq->kbase_cs_insert,
+      .capacity = trampoline_max_instrs,
+   };
+
+   struct cs_builder_conf conf = {
+      .nr_registers = nr_registers,
+      .nr_kernel_registers = nr_kernel_registers,
+      .alloc_buffer = NULL, // TODO(leegao): implement this
+   };
+
+   struct cs_builder b;
+   cs_builder_init(&b, &conf, ring_view);
+
+   struct cs_index addr_reg = {
+      .type = CS_INDEX_REGISTER, .size = 2, .reg = nr_registers - 4,
+   };
+   struct cs_index len_reg = {
+      .type = CS_INDEX_REGISTER, .size = 1, .reg = nr_registers - 2,
+   };
+
+   cs_move64_to(&b, addr_reg, stream_addr);
+   cs_move32_to(&b, len_reg, stream_size);
+   cs_call(&b, addr_reg, len_reg);
+   cs_end(&b);
+
+   uint32_t trampoline_bytes = cs_root_chunk_size(&b);
+   cs_builder_fini(&b);
+
+   uint32_t new_insert = subq->kbase_cs_insert + trampoline_bytes;
+   if (new_insert >= subq->kbase_cs_size){
+      mesa_logi("%s: new_insert=%u exceeds kbase_cs_size=%u, resetting to 0", __func__, new_insert, subq->kbase_cs_size);
+      new_insert = 0;
+   }
+
+   kbase_debug_cs_regs("before write_insert", subq, physical_csi_idx);
+   mesa_logi("%s: updating new_insert to %x", __func__, new_insert);
+
+   *kbase_user_cs_insert_ptr(subq->db_page, physical_csi_idx) = new_insert;
+   subq->kbase_cs_insert = new_insert;
+
+   kbase_debug_cs_regs("before kick", subq, physical_csi_idx);
+
+   bool active = kbase_user_cs_active(subq->db_page, physical_csi_idx);
+   if (active) {
+      kbase_ring_user_doorbell(subq->db_page);
+   } else {
+      struct kbase_ioctl_cs_queue_kick kick = { .buffer_gpu_addr = subq->kbase_cs_gpu_va };
+      if (kbase_ioctl(dev->drm_fd, KBASE_IOCTL_CS_QUEUE_KICK, &kick) < 0)
+         return panvk_errorf(dev, VK_ERROR_DEVICE_LOST,
+                              "KBASE_IOCTL_CS_QUEUE_KICK failed on subqueue %d: %s",
+                              subqueue, strerror(errno));
+   }
+
+   // struct timespec ts = { .tv_nsec = 100 * 1000 * 1000 }; /* 100ms */
+   // nanosleep(&ts, NULL);
+
+   // kbase_debug_cs_regs("after kick", subq, physical_csi_idx);
+
+   return VK_SUCCESS;
+}
+
 static VkResult
 panvk_queue_submit_ioctl(struct panvk_queue_submit *submit)
 {
@@ -1476,7 +1598,14 @@ panvk_queue_submit_ioctl(struct panvk_queue_submit *submit)
 
    if (phys_dev->kmod.is_kbase) {
       // kbase handles submission and queue kicks via mmap doorbell page
-      // TODO(leegao): fix this
+      for (uint32_t i = 0; i < submit->qsubmit_count; i++) {
+         const struct drm_panthor_queue_submit *qs = &submit->qsubmits[i];
+         VkResult result = kbase_subqueue_submit(queue, qs->queue_index,
+                                                 qs->stream_addr, qs->stream_size);
+         if (result != VK_SUCCESS)
+            return vk_queue_set_lost(&queue->vk, "kbase submit failed on subqueue %d",
+                                       qs->queue_index);
+      }
       return VK_SUCCESS;
    }
 
@@ -1697,7 +1826,7 @@ panvk_per_arch(create_gpu_queue)(struct panvk_device *dev,
 
    int ret = 0;
    if (phys_dev->kmod.is_kbase) {
-      queue->syncobj_handle = 1;
+      queue->syncobj_handle = 1; // TODO(leegao): fix this
    } else {
       ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
    }
